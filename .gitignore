@@ -1,0 +1,21 @@
+# Derleme çıktıları
+build/
+.build/
+*.xcodeproj
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Gizli bilgiler — kimlikler zaten ~/.kotabar altında (repo dışında) durur;
+# bunlar yanlışlıkla proje içine kimlik dosyası konursa diye savunma katmanı
+credentials.json
+*.credentials.json
+auth.json
+.env
+.env.*
+*.pem
+*.key
+
+# İç notlar (Türkçe, repo dışı tutulur)
+OZET.md
