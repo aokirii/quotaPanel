@@ -1,12 +1,12 @@
 import Foundation
 
-/// Grafik ve toplamlar için günlük istatistik
+/// Daily statistic for charts and totals
 struct DailyStat: Identifiable, Equatable, Sendable {
-    /// Yerel takvime göre günün başlangıcı
+    /// Start of day in the local calendar
     let day: Date
-    /// Claude için tahmini USD maliyet; Codex için 0
+    /// Estimated USD cost for Claude; 0 for Codex
     let costUSD: Double
-    /// Toplam token (input + output + cache)
+    /// Total tokens (input + output + cache)
     let tokens: Int
 
     var id: Date { day }

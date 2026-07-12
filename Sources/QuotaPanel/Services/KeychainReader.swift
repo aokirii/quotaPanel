@@ -1,13 +1,13 @@
 import Foundation
 import Security
 
-/// Claude Code'un OAuth kimlik bilgisini okur (salt-okunur, asla yazmaz).
+/// Reads Claude Code's OAuth credentials (read-only, never writes).
 ///
-/// Öncelik sırası:
-/// 1. `/usr/bin/security` CLI — sabit kimlikli olduğu için kullanıcı bir kez
-///    "Her Zaman İzin Ver" derse yeniden derlemelerde tekrar sormaz.
-/// 2. Doğrudan Keychain API (SecItemCopyMatching).
-/// 3. `~/.claude/.credentials.json` dosyası (Linux/eski kurulum düzeni).
+/// Priority order:
+/// 1. The `/usr/bin/security` CLI — it has a stable code identity, so one
+///    "Always Allow" survives rebuilds without re-prompting.
+/// 2. The Keychain API directly (SecItemCopyMatching).
+/// 3. The `~/.claude/.credentials.json` file (Linux/legacy layout).
 enum KeychainReader {
     static let claudeService = "Claude Code-credentials"
 
@@ -38,7 +38,7 @@ enum KeychainReader {
         let data = stdout.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
-        // security -w çıktısının sonunda newline olur
+        // security -w output ends with a newline
         if let text = String(data: data, encoding: .utf8) {
             return text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8)
         }

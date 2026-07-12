@@ -6,12 +6,12 @@ struct QuotaPanelApp: App {
     @State private var state = AppState()
 
     var body: some Scene {
-        // Tek menü çubuğu öğesi; panel içindeki şeritten sağlayıcı seçilir
+        // Single menu bar item; providers are switched via the strip inside the panel
         MenuBarExtra {
             MenuContentView(state: state)
         } label: {
-            // Etiket menü çubuğunda her zaman görünür olduğundan polling'i
-            // başlatmak için güvenilir tek yaşam döngüsü noktası burası
+            // The label is always visible in the menu bar, making this the one
+            // reliable lifecycle point to start polling
             CombinedMenuBarLabel(state: state)
                 .onAppear { state.start() }
         }
@@ -21,7 +21,7 @@ struct QuotaPanelApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Bundle dışında (swift run ile) çalışırken Dock ikonu çıkmasın
+        // No Dock icon when running outside a bundle (via swift run)
         NSApp.setActivationPolicy(.accessory)
     }
 }

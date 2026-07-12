@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Isı haritası: son 12 haftanın günlük grid'i (GitHub tarzı) + son 7 günün
-/// saat bazlı punch-card'ı. İstendiğinde hesaplanır.
+/// Heatmap: GitHub-style daily grid of the last 12 weeks + hour-of-day
+/// punch card of the last 7 days. Computed on demand.
 struct HeatmapView: View {
     let state: AppState
     let provider: Provider

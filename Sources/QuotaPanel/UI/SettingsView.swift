@@ -79,8 +79,8 @@ struct SettingsView: View {
         }
     }
 
-    /// ForEach içinden dizi elemanına güvenli bağlama: satır silindiği anda
-    /// eski index'e yazma denemesi sessizce yok sayılır
+    /// Safe binding to an array element from ForEach: writes to a stale index
+    /// right after a row is deleted are silently ignored
     private func thresholdBinding(_ index: Int) -> Binding<Double> {
         Binding(
             get: {

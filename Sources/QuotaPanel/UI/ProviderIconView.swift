@@ -1,18 +1,18 @@
 import SwiftUI
 
-/// Sağlayıcının marka simgesi. SVG'ler pakete `Resources/` altından girer
-/// (CodexBar'dan, MIT lisanslı); şablon (template) modda çizilir ki menü
-/// çubuğunun açık/koyu görünümüne uysun. Kaynak bulunamazsa (ör. çıplak
-/// binary'de) harfli daireye düşer.
+/// The provider's brand icon. SVGs ship in the bundle from `Resources/`
+/// (from CodexBar, MIT licensed) and render in template mode to match the
+/// menu bar's light/dark appearance. Falls back to a lettered circle when
+/// the resource is missing (e.g. bare binary).
 struct ProviderIconView: View {
     let provider: Provider
     var size: CGFloat = 18
-    /// nil → sistemin ön plan rengi (menü çubuğu için); değer → o renkle boyanır
+    /// nil → system foreground color (for the menu bar); a value → tinted with it
     var tint: Color?
 
     var body: some View {
-        // MenuBarExtra etiketi SwiftUI frame küçültmesini uygulamadığından
-        // NSImage hedef boyuta yükleme anında ölçeklenir
+        // MenuBarExtra labels don't honor SwiftUI frame downscaling, so the
+        // NSImage is scaled to the target size at load time
         if let image = IconCache.image(for: provider, size: size) {
             Image(nsImage: image)
                 .renderingMode(.template)
@@ -38,8 +38,8 @@ private enum IconCache {
         if let cached = cache[key] { return cached }
         let url = Bundle.main.url(forResource: "ProviderIcon-\(provider.rawValue)", withExtension: "svg")
         let image = url.flatMap { NSImage(contentsOf: $0) }.map { base in
-            // Vektörü hedef boyutta yeniden çizer; retina'da çizim anında
-            // ölçeklendiği için keskin kalır
+            // Redraws the vector at the target size; stays crisp on retina since
+            // scaling happens at draw time
             let sized = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
                 base.draw(in: rect)
                 return true

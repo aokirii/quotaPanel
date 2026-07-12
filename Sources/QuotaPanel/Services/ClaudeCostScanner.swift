@@ -1,10 +1,10 @@
 import Foundation
 
-/// `~/.claude/projects/**/*.jsonl` dosyalarını tarayıp günlük tahmini maliyet çıkarır.
+/// Scans `~/.claude/projects/**/*.jsonl` and derives estimated daily cost.
 ///
-/// - Artımlı: dosya (yol, mtime, boyut) değişmedikçe önbellekten okunur.
-/// - Tekilleştirme: aynı `message.id` birden çok dosyada/satırda görünebilir
-///   (oturum devamı/çatallanması); son görülen kazanır.
+/// - Incremental: a file is served from cache unless (path, mtime, size) changed.
+/// - Dedup: the same `message.id` can appear in multiple files/lines (session
+///   continuation/forking); the last one seen wins.
 actor ClaudeCostScanner {
     struct MessageStat: Sendable {
         let day: Date
@@ -38,7 +38,7 @@ actor ClaudeCostScanner {
                   let mtime = values.contentModificationDate,
                   let size = values.fileSize
             else { continue }
-            // Dosya kesitin öncesinde son kez değişmişse içindeki her mesaj da eski demektir
+            // If the file last changed before the cutoff, every message in it is older too
             guard mtime >= cutoff else { continue }
 
             let key = url.path
@@ -71,7 +71,7 @@ actor ClaudeCostScanner {
 
         var result: [String: MessageStat] = [:]
         for line in raw.split(separator: "\n") {
-            // JSON çözmeden önce ucuz filtre
+            // Cheap filter before JSON decoding
             guard line.contains("\"assistant\""), line.contains("\"usage\"") else { continue }
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -89,7 +89,7 @@ actor ClaudeCostScanner {
             let output = usage["output_tokens"] as? Int ?? 0
             let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
 
-            // cache_creation dilimi varsa 5dk/1s ayrımıyla, yoksa toplam 5dk sayılır
+            // With a cache_creation breakdown use the 5m/1h split, else count the total as 5m
             var cacheWrite5m = 0
             var cacheWrite1h = 0
             if let breakdown = usage["cache_creation"] as? [String: Any] {

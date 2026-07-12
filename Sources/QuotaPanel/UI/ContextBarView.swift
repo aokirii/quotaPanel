@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Tek açık oturumun bağlam penceresi kartı: etiket + yüzde, segmentli çubuk,
-/// token sayısı ve model
+/// Context-window card for one open session: label + percent, segmented bar,
+/// token counts, and model
 struct ContextBarView: View {
     let context: ContextSnapshot
 
@@ -23,7 +23,7 @@ struct ContextBarView: View {
                 Text("\(formatTokenCount(context.used)) / \(formatTokenCount(context.limit)) tokens")
                 Spacer()
                 if !context.model.isEmpty {
-                    Text(context.model).lineLimit(1)
+                    Text(context.detailLabel).lineLimit(1)
                 }
             }
             .font(.caption2)

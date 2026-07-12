@@ -1,8 +1,8 @@
 import Foundation
 
-/// Model fiyat tablosu (USD / milyon token).
-/// Kaynak: platform.claude.com güncel fiyatları (Temmuz 2026).
-/// Fiyatlar değişirse sadece bu dosyayı güncelle.
+/// Model price table (USD / million tokens).
+/// Source: current platform.claude.com prices (July 2026).
+/// When prices change, this is the only file to update.
 enum Pricing {
     struct ModelPrice: Sendable {
         let input: Double
@@ -12,7 +12,7 @@ enum Pricing {
         var cacheRead: Double { input * 0.1 }
     }
 
-    /// Model adına göre fiyat; bilinmeyen modeller için nil (maliyete katılmaz)
+    /// Price by model name; nil for unknown models (excluded from cost)
     static func price(for model: String) -> ModelPrice? {
         let m = model.lowercased()
         if m.contains("<synthetic>") { return nil }
@@ -23,7 +23,7 @@ enum Pricing {
         return nil
     }
 
-    /// Tek bir mesajın token kullanımından tahmini maliyet (USD)
+    /// Estimated cost (USD) of one message's token usage
     static func cost(
         model: String,
         inputTokens: Int,

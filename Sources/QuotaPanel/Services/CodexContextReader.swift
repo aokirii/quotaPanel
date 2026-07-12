@@ -1,11 +1,11 @@
 import Foundation
 
-/// Açık Codex oturumlarının bağlam doluluğunu rollout kayıtlarından okur.
+/// Reads the context fill of open Codex sessions from rollout logs.
 ///
-/// Codex'te açık-oturum kayıt defteri yok; canlılık sinyali çalışan bir
-/// interaktif `codex` süreci. Süreç yoksa çubuk gösterilmez (bayat oturuma
-/// düşülmez). Süreç listesi okunamazsa son 15 dakikada yazılmış rollout'lara,
-/// o da yoksa en yenisine düşülür.
+/// Codex has no open-session registry; the liveness signal is a running
+/// interactive `codex` process. No process → no bars (no stale fallback).
+/// If the process list can't be read, falls back to rollouts written in the
+/// last 15 minutes, then the newest.
 enum CodexContextReader {
     static func contexts(maxSessions: Int = 3, activeMinutes: TimeInterval = 15) async -> [ContextSnapshot] {
         await Task.detached(priority: .utility) {
@@ -39,7 +39,7 @@ enum CodexContextReader {
         return paths.prefix(maxSessions).compactMap { readContext(url: $0) }
     }
 
-    /// true: interaktif codex çalışıyor; false: çalışmıyor; nil: söylenemiyor
+    /// true: an interactive codex is running; false: none; nil: can't tell
     private nonisolated static func codexRunning() -> Bool? {
         guard let pidsOut = run("/usr/bin/pgrep", ["-f", "codex"]) else { return nil }
         for pid in pidsOut.split(separator: "\n").map(String.init) where Int(pid) != nil {
@@ -49,8 +49,8 @@ enum CodexContextReader {
         return false
     }
 
-    /// İnteraktif Codex CLI'ı (TUI) tanır; `codex app-server` gibi yardımcı
-    /// süreçler açık oturum sayılmaz
+    /// Recognizes the interactive Codex CLI (TUI); helpers like
+    /// `codex app-server` don't count as open sessions
     private nonisolated static func argvIsCodexTUI(_ argv: [String]) -> Bool {
         guard !argv.isEmpty, !argv.contains("app-server") else { return false }
         if URL(fileURLWithPath: argv[0]).lastPathComponent == "codex" { return true }
@@ -70,14 +70,17 @@ enum CodexContextReader {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Tek rollout'un bağlam okuması: doluluk son turun `total_tokens` değeri /
-    /// kayıttaki `model_context_window`; bileşim tur-artımlı girdi/çıktı
-    /// toplamları (önbellekli prompt okumaları hariç, Codex önbellek-yazma vermez)
+    /// Context reading for one rollout: fill is the last turn's `total_tokens`
+    /// against the log's `model_context_window`; composition is per-turn
+    /// incremental input/output (cached prompt reads excluded; Codex reports
+    /// no cache-write count)
     private nonisolated static func readContext(url: URL) -> ContextSnapshot? {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
 
         var cwd = ""
         var model = ""
+        var effort: String?
+        var collaborationMode: String?
         var window = 0
         var parts = TokenParts()
         var lastUsage: [String: Any]?
@@ -98,6 +101,10 @@ enum CodexContextReader {
             case "turn_context":
                 model = payload["model"] as? String ?? model
                 cwd = payload["cwd"] as? String ?? cwd
+                effort = payload["effort"] as? String ?? effort
+                if let collab = payload["collaboration_mode"] as? [String: Any] {
+                    collaborationMode = collab["mode"] as? String ?? collaborationMode
+                }
             case "event_msg" where payload["type"] as? String == "token_count":
                 guard let info = payload["info"] as? [String: Any],
                       let lu = info["last_token_usage"] as? [String: Any]
@@ -119,7 +126,10 @@ enum CodexContextReader {
             model: model,
             used: usage["total_tokens"] as? Int ?? 0,
             limit: window,
-            parts: parts
+            parts: parts,
+            effort: effort,
+            // "default" carries no information; only special modes like plan are shown
+            mode: collaborationMode.flatMap { $0 == "default" ? nil : $0 }
         )
     }
 }

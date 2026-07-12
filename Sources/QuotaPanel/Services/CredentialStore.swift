@@ -1,6 +1,6 @@
 import Foundation
 
-/// QuotaPanel'in kendi girişiyle alınan kimlikler
+/// Credentials obtained via QuotaPanel's own sign-in
 struct StoredCredentials: Codable, Sendable {
     var accessToken: String
     var refreshToken: String?
@@ -15,17 +15,17 @@ struct StoredCredentials: Codable, Sendable {
     }
 }
 
-/// Uygulama-içi girişlerin yereldeki deposu: `~/.quotapanel/credentials.json`.
-/// Proje dizininin tamamen dışında durur (repoya girmesi imkânsız) ve yalnızca
-/// kullanıcı okuyabilir (dizin 0700, dosya 0600). CLI'ların kendi kimlik
-/// dosyalarına (`~/.claude`, `~/.codex`) asla yazılmaz.
+/// Local store for in-app sign-ins: `~/.quotapanel/credentials.json`.
+/// Lives entirely outside the project directory (can never end up in the
+/// repo) and is readable only by the user (dir 0700, file 0600). The CLIs'
+/// own credential files (`~/.claude`, `~/.codex`) are never written.
 enum CredentialStore {
     private static var fileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".quotapanel/credentials.json")
     }
 
-    /// Uygulamanın eski adından (KotaBar) kalan depo; ilk erişimde taşınır
+    /// Store left over from the app's old name (KotaBar); moved on first access
     private static var legacyFileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".kotabar/credentials.json")

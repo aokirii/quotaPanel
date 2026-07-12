@@ -49,10 +49,10 @@ enum OAuthError: LocalizedError {
     }
 }
 
-// MARK: - Claude (Anthropic OAuth, kod yapıştırmalı PKCE akışı)
+// MARK: - Claude (Anthropic OAuth, paste-a-code PKCE flow)
 
-/// Claude Code'un herkese açık OAuth istemcisiyle giriş. Tarayıcıda onaydan
-/// sonra sayfa bir kod gösterir ("code#state"); kullanıcı panele yapıştırır.
+/// Sign-in via Claude Code's public OAuth client. After approval the browser
+/// page shows a code ("code#state") that the user pastes into the panel.
 enum ClaudeAuth {
     static let clientID = "REDACTED-CLAUDE-CLIENT-ID"
     private static let authorizeURL = "https://claude.ai/oauth/authorize"
@@ -83,7 +83,7 @@ enum ClaudeAuth {
         return Session(url: components.url!, verifier: verifier, state: state)
     }
 
-    /// Kullanıcının yapıştırdığı "kod" ya da "code#state" girdisini token'a çevirir
+    /// Exchanges the pasted "code" or "code#state" input for tokens
     static func exchange(codeInput: String, session: Session) async throws -> StoredCredentials {
         let trimmed = codeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw OAuthError.badCode }
@@ -149,11 +149,11 @@ enum ClaudeAuth {
     }
 }
 
-// MARK: - Codex (OpenAI OAuth, localhost callback'li PKCE akışı)
+// MARK: - Codex (OpenAI OAuth, localhost-callback PKCE flow)
 
-/// codex CLI'ın herkese açık OAuth istemcisiyle giriş: tarayıcı açılır,
-/// onaydan sonra auth.openai.com `localhost:1455/auth/callback`'e yönlendirir;
-/// uygulama içindeki mini sunucu kodu yakalayıp token'a çevirir.
+/// Sign-in via the codex CLI's public OAuth client: the browser opens and,
+/// after approval, auth.openai.com redirects to `localhost:1455/auth/callback`;
+/// the in-app mini server catches the code and exchanges it for tokens.
 enum CodexAuth {
     static let clientID = "app_REDACTED"
     private static let authorizeURL = "https://auth.openai.com/oauth/authorize"
@@ -185,8 +185,8 @@ enum CodexAuth {
         return Session(url: components.url!, verifier: verifier, state: state)
     }
 
-    /// Callback'i bekler ve kodu token'a çevirir (tarayıcı `beginLogin().url` ile
-    /// önceden açılmış olmalı)
+    /// Waits for the callback and exchanges the code (the browser must already
+    /// be opened at `beginLogin().url`)
     static func completeLogin(session: Session, timeoutSeconds: Double = 300) async throws -> StoredCredentials {
         let code = try await CallbackServer.waitForCode(
             expectedState: session.state,
@@ -232,8 +232,8 @@ enum CodexAuth {
         )
     }
 
-    /// id_token JWT'sindeki ChatGPT hesap kimliği — usage isteğinin
-    /// `ChatGPT-Account-Id` başlığı için gerekli
+    /// ChatGPT account ID from the id_token JWT — needed for the usage
+    /// request's `ChatGPT-Account-Id` header
     static func chatgptAccountId(_ idToken: String) -> String? {
         (jwtClaims(idToken)?["https://api.openai.com/auth"] as? [String: Any])?["chatgpt_account_id"] as? String
     }
@@ -254,10 +254,10 @@ enum CodexAuth {
     }
 }
 
-// MARK: - Callback sunucusu
+// MARK: - Callback server
 
-/// Yalnızca loopback'e bağlanan, tek bir OAuth callback'i bekleyen mini HTTP
-/// sunucusu. Yanıtı verdikten sonra kendini kapatır.
+/// Mini HTTP server that binds to loopback only and waits for a single
+/// OAuth callback. Shuts itself down after responding.
 enum CallbackServer {
     static func waitForCode(expectedState: String, port: UInt16, timeoutSeconds: Double) async throws -> String {
         let parameters = NWParameters.tcp
@@ -295,7 +295,7 @@ enum CallbackServer {
                     case .failure:
                         html = "<html><body style='font-family:sans-serif'><h3>Sign-in failed</h3><p>Try again from QuotaPanel.</p></body></html>"
                     case nil:
-                        // callback dışı istek (ör. favicon) — bağlantıyı kapat, beklemeye devam
+                        // non-callback request (e.g. favicon) — close it and keep waiting
                         connection.cancel()
                         return
                     }
@@ -314,7 +314,7 @@ enum CallbackServer {
         }
     }
 
-    /// HTTP isteğinden callback sonucunu çıkarır; callback yolu değilse nil
+    /// Extracts the callback result from an HTTP request; nil if not the callback path
     static func parseCallback(request: String, expectedState: String) -> Result<String, Error>? {
         guard let requestLine = request.split(separator: "\r\n").first,
               requestLine.hasPrefix("GET ")
@@ -337,7 +337,7 @@ enum CallbackServer {
         return .success(code)
     }
 
-    /// Continuation'ı tek sefer sürdürüp dinleyiciyi kapatır
+    /// Resumes the continuation exactly once and cancels the listener
     private final class ResultBox: @unchecked Sendable {
         var continuation: CheckedContinuation<String, Error>?
         private let listener: NWListener

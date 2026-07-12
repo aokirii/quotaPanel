@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Tek menü çubuğu öğesinin etiketi: panelde o an açık olan sağlayıcının
-/// marka simgesi (+ yüzde + mini bar). Şeritten sağlayıcı değişince değişir.
+/// Label of the single menu bar item: the brand icon (+ percent + mini bar)
+/// of the provider currently open in the panel. Follows strip selection.
 struct CombinedMenuBarLabel: View {
     let state: AppState
 
@@ -13,8 +13,8 @@ struct CombinedMenuBarLabel: View {
     }
 }
 
-/// Bir sağlayıcının menü çubuğu birimi: marka simgesi, isteğe bağlı yüzde ve
-/// altında en dolu pencerenin mini kullanım barı
+/// One provider's menu bar unit: brand icon, optional percent, and a mini
+/// usage bar of the fullest window underneath
 struct ProviderMenuBarLabel: View {
     let state: AppState
     let provider: Provider

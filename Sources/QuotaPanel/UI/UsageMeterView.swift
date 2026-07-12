@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Tek bir limit penceresi: etiket, ilerleme çubuğu, yüzde ve sıfırlanma sayacı.
-/// `parts` verilirse çubuk girdi/önbellek/çıktı segmentlerine bölünür.
+/// One rate-limit window: label, progress bar, percent, and reset countdown.
+/// With `parts` the bar is split into input/cache/output segments.
 struct UsageMeterView: View {
     let window: RateWindow
     var parts: TokenParts?

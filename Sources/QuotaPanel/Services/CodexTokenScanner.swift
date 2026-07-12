@@ -1,8 +1,8 @@
 import Foundation
 
-/// `~/.codex/sessions/YYYY/MM/DD/*.jsonl` oturum kayıtlarından günlük token
-/// toplamı çıkarır. Her dosyanın SON `token_count` olayındaki
-/// `total_token_usage.total_tokens` o oturumun toplamıdır; gün, dizin yolundan okunur.
+/// Derives daily token totals from `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
+/// rollout logs. The LAST `token_count` event's `total_token_usage.total_tokens`
+/// is that session's total; the day comes from the directory path.
 actor CodexTokenScanner {
     private struct FileCacheEntry {
         let mtime: Date
@@ -52,7 +52,7 @@ actor CodexTokenScanner {
             .sorted { $0.day < $1.day }
     }
 
-    /// .../sessions/2026/07/12/rollout-*.jsonl → 12 Tem 2026 (yerel gün başlangıcı)
+    /// .../sessions/2026/07/12/rollout-*.jsonl → Jul 12 2026 (local start of day)
     private static func dayFromPath(_ url: URL) -> Date? {
         let parts = url.pathComponents
         guard parts.count >= 4 else { return nil }

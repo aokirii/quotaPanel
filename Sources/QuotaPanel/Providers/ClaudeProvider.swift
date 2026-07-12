@@ -1,13 +1,13 @@
 import Foundation
 
-/// Claude Code kullanım verisi: Keychain'deki OAuth token ile
-/// `api.anthropic.com/api/oauth/usage` endpoint'inden okunur.
+/// Claude Code usage data: read from the `api.anthropic.com/api/oauth/usage`
+/// endpoint using the OAuth token in the Keychain.
 enum ClaudeProvider {
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private static let betaHeader = "oauth-2025-04-20"
     private static let fallbackVersion = "2.1.0"
 
-    // claude --version çıktısı bir kez tespit edilip saklanır (User-Agent için)
+    // claude --version output detected once and cached (for the User-Agent)
     private static let detectedVersion: String = detectClaudeVersion()
 
     struct Credentials {
@@ -40,8 +40,8 @@ enum ClaudeProvider {
     }
 
     static func fetch() async -> ProviderSnapshot {
-        // 1) QuotaPanel'in kendi girişi: süresi dolmuşsa refresh token ile yenilenir,
-        // yani CLI'ı hiç çalıştırmadan veri akmaya devam eder
+        // 1) QuotaPanel's own sign-in: renewed via refresh token when expired,
+        // so data keeps flowing without ever running the CLI
         if var stored = CredentialStore.load(.claude) {
             if stored.isExpired {
                 guard let renewed = await ClaudeAuth.refresh(stored) else {
@@ -53,7 +53,7 @@ enum ClaudeProvider {
             return await fetchUsage(token: stored.accessToken, plan: planName(stored.plan))
         }
 
-        // 2) Claude Code CLI'ın kimliği (Keychain → dosya)
+        // 2) The Claude Code CLI's credentials (Keychain → file)
         guard let creds = loadCredentials() else {
             return snapshot(.authProblem("No credentials — sign in from Settings or run `claude` once"))
         }
@@ -89,7 +89,7 @@ enum ClaudeProvider {
         }
     }
 
-    // MARK: - Yanıt ayrıştırma
+    // MARK: - Response parsing
 
     private struct UsageResponse: Decodable {
         struct Window: Decodable {

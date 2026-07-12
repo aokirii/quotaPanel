@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Panelin üstündeki sağlayıcı şeridi: ikon + ad + altında 5 saatlik oturum
-/// penceresi kadar dolan mini bar. Sağlayıcı sayısı arttıkça yana kaydırılır.
+/// Provider strip at the top of the panel: icon + name + a mini bar that
+/// fills to the 5-hour session window. Scrolls horizontally as providers grow.
 struct ProviderSwitcherView: View {
     let state: AppState
     @Binding var selected: Provider
@@ -45,7 +45,7 @@ struct ProviderChip: View {
         .help(barHelp)
     }
 
-    /// 5 saatlik oturum penceresi kadar dolan bar: %0 → boş, %15 → %15 dolu
+    /// Bar filled to the 5-hour session window: 0% → empty, 15% → 15% filled
     private var sessionBar: some View {
         ZStack(alignment: .leading) {
             Capsule().fill(.quaternary)

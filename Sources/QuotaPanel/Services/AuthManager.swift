@@ -2,20 +2,20 @@ import AppKit
 import Foundation
 import Observation
 
-/// Ayarlar'daki Hesaplar bölümünün durum makinesi: giriş akışlarını yürütür,
-/// sonucu CredentialStore'a yazar ve panelin yenilenmesini tetikler.
+/// State machine for the Accounts section in Settings: runs the sign-in
+/// flows, writes results to CredentialStore, and triggers a panel refresh.
 @MainActor
 @Observable
 final class AuthManager {
-    /// Claude girişi kod bekliyorsa aktif oturum
+    /// Active session while the Claude sign-in is waiting for a code
     var claudeSession: ClaudeAuth.Session?
     var claudeCodeInput = ""
-    /// Codex girişi tarayıcı callback'ini bekliyor mu
+    /// Whether the Codex sign-in is waiting for the browser callback
     var codexWaiting = false
     var busy: Provider?
     var errorMessage: [Provider: String] = [:]
 
-    /// Giriş/çıkış sonrası panelin verisini tazeler (AppState bağlar)
+    /// Refreshes panel data after sign-in/out (wired up by AppState)
     var onCredentialsChanged: (() async -> Void)?
 
     func hasStoredLogin(_ provider: Provider) -> Bool {
@@ -74,9 +74,9 @@ final class AuthManager {
         }
     }
 
-    // MARK: - Çıkış
+    // MARK: - Sign out
 
-    /// Yalnızca QuotaPanel'in kendi kimliğini siler; CLI'ların kimliklerine dokunmaz
+    /// Deletes only QuotaPanel's own credentials; CLI credentials are untouched
     func logout(_ provider: Provider) async {
         CredentialStore.delete(provider)
         errorMessage[provider] = nil

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Offline özet: son 24 saat / 7 gün / 30 gün toplamları, her biri
-/// girdi/önbellek/çıktı bileşimiyle. İstendiğinde hesaplanır.
+/// Offline summary: totals over the last 24 h / 7 days / 30 days, each with
+/// its input/cache/output composition. Computed on demand.
 struct HistoryView: View {
     let state: AppState
     let provider: Provider

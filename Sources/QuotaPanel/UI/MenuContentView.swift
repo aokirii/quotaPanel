@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// ☰ karşılığı görünüm seçici: canlı panel, offline özet, ısı haritası
+/// View switcher (the ☰ equivalent): live panel, offline summary, heatmap
 enum PanelMode: String, CaseIterable, Identifiable {
     case live = "Live"
     case history = "Summary"
@@ -9,13 +9,13 @@ enum PanelMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Tek panel: üstteki şeritten sağlayıcı seçilir, altında seçilenin detayı
+/// Single panel: pick a provider in the strip, its detail renders below
 struct MenuContentView: View {
     let state: AppState
     @State private var showSettings = false
     @State private var mode: PanelMode = .live
 
-    /// Seçili sağlayıcı ayarlardan kapatıldıysa ilk açık olana düşer
+    /// Falls back to the first enabled provider if the selected one is disabled
     private var provider: Provider {
         state.availableProviders.contains(state.selectedProvider)
             ? state.selectedProvider
@@ -167,8 +167,8 @@ struct ProviderSectionView: View {
                 }
             case .ok:
                 ForEach(snapshot.windows) { window in
-                    // Bileşim yalnızca oturum penceresine uygulanır; haftalık
-                    // pencerelerin bileşimi 5 saatlik taramadan türetilemez
+                    // Composition applies to the session window only; weekly windows
+                    // can't be derived from a 5-hour scan
                     UsageMeterView(
                         window: window,
                         parts: window.label.hasPrefix("Session") ? sessionParts : nil

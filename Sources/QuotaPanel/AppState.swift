@@ -10,15 +10,15 @@ final class AppState {
     var codexDaily: [DailyStat] = []
     var claudeContexts: [ContextSnapshot] = []
     var codexContexts: [ContextSnapshot] = []
-    /// Oturum penceresi çubuğunu bölen son-5-saat bileşimi
+    /// Last-5-hours composition used to split the session window bar
     var claudeSessionParts: TokenParts?
     var codexSessionParts: TokenParts?
-    /// Özet ve ısı haritası görünümlerinin verisi; ilk açılışta hesaplanır
+    /// Data for the Summary and Heatmap views; computed when first opened
     var claudeActivity: ProviderActivity?
     var codexActivity: ProviderActivity?
     var lastRefresh: Date?
     var isRefreshing = false
-    /// Panelde açık olan sağlayıcı; menü çubuğu simgesi de bunu gösterir
+    /// Provider currently open in the panel; the menu bar icon mirrors it
     var selectedProvider: Provider {
         didSet { UserDefaults.standard.set(selectedProvider.rawValue, forKey: "selectedProvider") }
     }
@@ -38,7 +38,7 @@ final class AppState {
     private var pollTask: Task<Void, Never>?
 
     func start() {
-        // Her menü çubuğu öğesinin onAppear'ı çağırır; ikinci çağrı işlemsiz
+        // Called from the menu bar label's onAppear; repeat calls are no-ops
         guard pollTask == nil else { return }
         notifier.setup()
         auth.onCredentialsChanged = { [weak self] in await self?.refreshAll() }
@@ -60,7 +60,7 @@ final class AppState {
             lastRefresh = Date()
         }
 
-        // API çağrıları ve yerel log taramaları paralel yürür
+        // API calls and local log scans run in parallel
         async let claudeSnapshot = settings.claudeEnabled ? ClaudeProvider.fetch() : nil
         async let codexSnapshot = settings.codexEnabled ? CodexProvider.fetch() : nil
         async let claudeStats = settings.claudeEnabled ? claudeScanner.dailyStats() : []
@@ -86,7 +86,7 @@ final class AppState {
         codexSessionParts = await codexParts
     }
 
-    /// Özet / ısı haritası verisini hazırlar (tarayıcı 5 dk önbellekler)
+    /// Prepares Summary/Heatmap data (the scanner caches for 5 minutes)
     func loadActivity(force: Bool = false) async {
         if settings.claudeEnabled {
             claudeActivity = await historyScanner.claudeActivity(force: force)
@@ -96,8 +96,8 @@ final class AppState {
         }
     }
 
-    /// Şeritte gösterilecek sağlayıcılar; ikisi de kapalıysa panel erişilebilir
-    /// kalsın diye tümü listelenir
+    /// Providers shown in the strip; if all are disabled, every provider is
+    /// listed so the panel stays reachable
     var availableProviders: [Provider] {
         let enabled = Provider.allCases.filter { settings.isEnabled($0) }
         return enabled.isEmpty ? Provider.allCases : enabled
@@ -119,7 +119,7 @@ final class AppState {
         provider == .claude ? claudeSessionParts : codexSessionParts
     }
 
-    // MARK: - Özet toplamlar
+    // MARK: - Aggregate totals
 
     var claudeCostToday: Double {
         let today = Calendar.current.startOfDay(for: Date())

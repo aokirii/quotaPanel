@@ -1,8 +1,9 @@
 import Foundation
 
-/// Yerel oturum kayıtlarından offline özet (24s/7g/30g), ısı haritası ve pencere
-/// bileşimi üretir. Ağır 12 haftalık tarama yalnızca istendiğinde yapılır ve
-/// 5 dakika önbelleklenir; cutoff'tan eski dosyalar mtime ile atlanır.
+/// Produces the offline summary (24h/7d/30d), heatmaps, and window
+/// composition from local session logs. The heavy 12-week scan only runs on
+/// demand and is cached for 5 minutes; files older than the cutoff are
+/// skipped by mtime.
 actor UsageHistoryScanner {
     struct Event: Sendable {
         let ts: Date
@@ -14,7 +15,7 @@ actor UsageHistoryScanner {
     private var cache: [String: (at: Date, activity: ProviderActivity)] = [:]
     private let cacheSeconds: TimeInterval = 300
 
-    // MARK: - Genel API
+    // MARK: - Public API
 
     func claudeActivity(force: Bool = false) -> ProviderActivity {
         activity(key: "claude", force: force) { cutoff in Self.claudeEvents(since: cutoff) }
@@ -24,7 +25,7 @@ actor UsageHistoryScanner {
         activity(key: "codex", force: force) { cutoff in Self.codexEvents(since: cutoff) }
     }
 
-    /// Son `hours` saatteki bileşim — oturum penceresi çubuğunu bölmek için
+    /// Composition over the last `hours` hours — used to split the session window bar
     func claudeWindowParts(hours: Double) -> TokenParts {
         Self.sumParts(Self.claudeEvents(since: Date(timeIntervalSinceNow: -hours * 3600)))
     }
@@ -42,10 +43,10 @@ actor UsageHistoryScanner {
         return result
     }
 
-    // MARK: - Olay kaynakları
+    // MARK: - Event sources
 
-    /// Claude: her usage kaydı için (ts, girdi, önbellek-yazma, çıktı).
-    /// Önbellek okumaları hariç.
+    /// Claude: (ts, input, cache-write, output) per usage record.
+    /// Cache reads excluded.
     nonisolated static func claudeEvents(since cutoff: Date) -> [Event] {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects")
@@ -77,8 +78,8 @@ actor UsageHistoryScanner {
         return events
     }
 
-    /// Codex: her turun artımlı `last_token_usage` değeri. Önbellekli prompt
-    /// token'ları hariç; Codex önbellek-yazma sayısı vermediği için cache 0 kalır.
+    /// Codex: each turn's incremental `last_token_usage`. Cached prompt tokens
+    /// excluded; cache stays 0 since Codex reports no cache-write count.
     nonisolated static func codexEvents(since cutoff: Date) -> [Event] {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions")
@@ -110,8 +111,9 @@ actor UsageHistoryScanner {
         return events
     }
 
-    /// usage sözlüğünden önbellek-yazma token'ları; yeni biçimde `cache_creation`
-    /// altındaki ephemeral alanlar, eskisinde düz `cache_creation_input_tokens`
+    /// Cache-write tokens from a usage dict; the newer format nests ephemeral
+    /// fields under `cache_creation`, the older one has a flat
+    /// `cache_creation_input_tokens`
     nonisolated static func cacheWriteTokens(_ usage: [String: Any]) -> Int {
         if let breakdown = usage["cache_creation"] as? [String: Any] {
             let w5 = breakdown["ephemeral_5m_input_tokens"] as? Int ?? 0
@@ -137,7 +139,7 @@ actor UsageHistoryScanner {
         return urls
     }
 
-    // MARK: - Toplama
+    // MARK: - Aggregation
 
     nonisolated static func sumParts(_ events: [Event]) -> TokenParts {
         var parts = TokenParts()
@@ -149,7 +151,7 @@ actor UsageHistoryScanner {
         return parts
     }
 
-    /// 12 haftalık grid'in başlangıcı: 11 hafta önceki pazartesi (yerel takvim)
+    /// Start of the 12-week grid: the Monday 11 weeks back (local calendar)
     nonisolated static func gridStart(weeks: Int = 12) -> Date {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
@@ -194,7 +196,7 @@ actor UsageHistoryScanner {
             HistoryBucket(id: "monthly", label: "Monthly · 30 days", parts: buckets["monthly"] ?? .init()),
         ]
 
-        // Günlük grid: hafta sütunları, her sütun Pzt...Paz
+        // Daily grid: week columns, each Mon...Sun
         let dayFmt = DateFormatter()
         dayFmt.dateFormat = "d MMM"
         let peak = dailyTotals.values.max() ?? 0
@@ -218,7 +220,7 @@ actor UsageHistoryScanner {
             grid.append(column)
         }
 
-        // Saat punch-card'ı: son 7 gün, en eski üstte
+        // Hour punch card: last 7 days, oldest on top
         let weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         let hourPeak = hourTotals.values.flatMap(\.self).max() ?? 0
         var hourRows: [HeatmapHourRow] = []
@@ -245,7 +247,7 @@ actor UsageHistoryScanner {
         )
     }
 
-    /// 0-4 arası yoğunluk: 0 boş, 1-4 zirveye oranla
+    /// Intensity 0-4: 0 empty, 1-4 relative to the peak
     nonisolated static func level(_ tokens: Int, peak: Int) -> Int {
         guard peak > 0, tokens > 0 else { return 0 }
         return min(4, 1 + Int(Double(tokens) / Double(peak) * 3.999))

@@ -1,11 +1,11 @@
 import Foundation
 
-/// Codex (OpenAI) kullanım verisi: `~/.codex/auth.json` içindeki token ile
-/// `chatgpt.com/backend-api/wham/usage` endpoint'inden okunur.
+/// Codex (OpenAI) usage data: read from the `chatgpt.com/backend-api/wham/usage`
+/// endpoint using the token in `~/.codex/auth.json`.
 enum CodexProvider {
     private static let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     private static let refreshURL = URL(string: "https://auth.openai.com/oauth/token")!
-    /// Codex CLI'ın herkese açık OAuth client kimliği (auth.json'u üreten uygulama)
+    /// The Codex CLI's public OAuth client ID (the app that produces auth.json)
     private static let clientID = "app_REDACTED"
 
     struct Credentials {
@@ -13,8 +13,9 @@ enum CodexProvider {
         let accountId: String?
         let expiresAt: Date?
         let refreshToken: String?
-        /// true: kimlik QuotaPanel'in kendi girişinden — yenilenen token depoya da
-        /// yazılır. false: codex CLI'ın auth.json'ı — yalnızca bellekte tutulur.
+        /// true: credentials come from QuotaPanel's own sign-in — refreshed tokens
+        /// are persisted to the store. false: the codex CLI's auth.json — kept
+        /// in memory only.
         var persistRefresh = false
 
         var isExpired: Bool {
@@ -23,8 +24,8 @@ enum CodexProvider {
         }
     }
 
-    /// Yenilenen token yalnızca bellekte tutulur; auth.json'a asla yazılmaz
-    /// (dosyanın sahibi codex CLI, eşzamanlı yazma dosyayı bozabilir).
+    /// Refreshed tokens are kept in memory only; auth.json is never written
+    /// (the codex CLI owns that file, concurrent writes could corrupt it).
     private actor RefreshedTokens {
         private var accessToken: String?
         private var expiresAt: Date?
@@ -63,7 +64,7 @@ enum CodexProvider {
     }
 
     static func fetch() async -> ProviderSnapshot {
-        // 1) QuotaPanel'in kendi girişi, 2) codex CLI'ın auth.json'ı
+        // 1) QuotaPanel's own sign-in, 2) the codex CLI's auth.json
         var creds: Credentials
         if let stored = CredentialStore.load(.codex) {
             creds = Credentials(
@@ -128,8 +129,8 @@ enum CodexProvider {
         }
     }
 
-    /// auth.openai.com üzerinden refresh_token akışı; başarılıysa yeni token
-    /// bellekteki depoya da yazılır
+    /// refresh_token flow via auth.openai.com; on success the new token is
+    /// also written to the in-memory store
     private static func refreshAccessToken(_ creds: Credentials) async -> Credentials? {
         guard let refreshToken = creds.refreshToken, !refreshToken.isEmpty else { return nil }
 
@@ -159,8 +160,8 @@ enum CodexProvider {
             } else {
                 expires = jwtExpiry(token)
             }
-            // auth.openai.com refresh token'ı döndürür; QuotaPanel girişinde
-            // yenisi depoya yazılır ki sonraki yenilemeler de çalışsın
+            // auth.openai.com rotates refresh tokens; for QuotaPanel sign-ins the
+            // new one is persisted so later refreshes keep working
             let newRefreshToken = (json["refresh_token"] as? String) ?? refreshToken
             if creds.persistRefresh {
                 var stored = CredentialStore.load(.codex)
@@ -185,7 +186,7 @@ enum CodexProvider {
         }
     }
 
-    // MARK: - Yanıt ayrıştırma
+    // MARK: - Response parsing
 
     private struct UsageResponse: Decodable {
         struct Window: Decodable {
@@ -260,7 +261,7 @@ enum CodexProvider {
         ProviderSnapshot(provider: .codex, status: status, windows: [], planName: plan, updatedAt: Date())
     }
 
-    /// JWT payload'ından exp alanını okur (imza doğrulaması gerekmez, sadece süre kontrolü)
+    /// Reads the exp claim from a JWT payload (no signature check needed, expiry only)
     private static func jwtExpiry(_ token: String) -> Date? {
         let parts = token.split(separator: ".")
         guard parts.count >= 2 else { return nil }

@@ -1,16 +1,16 @@
 import Foundation
 import UserNotifications
 
-/// Limit eşiği aşıldığında ve limit sıfırlandığında macOS bildirimi gönderir.
-/// Aynı pencere döngüsü içinde aynı eşik için tekrar bildirim atmaz.
+/// Sends macOS notifications when a threshold is crossed and when a limit
+/// resets. Never repeats the same threshold within one window cycle.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private var authorized = false
-    /// "provider|window" → bildirilen en yüksek eşik
+    /// "provider|window" → highest threshold notified so far
     private var notifiedThreshold: [String: Double] = [:]
 
-    /// Bildirimler yalnızca .app paketinden çalışır; çıplak binary'de
-    /// UNUserNotificationCenter çöker, o yüzden kontrol şart.
+    /// Notifications only work from a .app bundle; UNUserNotificationCenter
+    /// crashes in a bare binary, hence the check.
     static var isSupported: Bool {
         Bundle.main.bundleURL.pathExtension == "app"
     }
@@ -32,7 +32,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             let percent = window.clampedPercent
             let previous = notifiedThreshold[key]
 
-            // Sıfırlanma: daha önce uyarı verilmişti, şimdi belirgin şekilde düştü
+            // Reset: a warning was sent earlier and usage has now clearly dropped
             if let prev = previous, prev >= (thresholds.min() ?? 0), percent < 10 {
                 notifiedThreshold[key] = nil
                 send(
@@ -52,8 +52,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// Aşılan en yüksek eşik, daha önce bildirilenden yüksekse onu döndürür.
-    /// Bir yenilemede birden çok eşik birden aşılırsa tek (en yüksek) bildirim atılır.
+    /// Returns the highest crossed threshold if it exceeds the one already
+    /// notified. Crossing several thresholds in one refresh yields a single
+    /// (highest) notification.
     nonisolated static func newlyCrossedThreshold(percent: Double, previous: Double?, thresholds: [Double]) -> Double? {
         guard let crossed = thresholds.filter({ percent >= $0 }).max(),
               crossed > previous ?? 0
@@ -81,7 +82,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().add(request)
     }
 
-    // Uygulama önplandayken de banner göster
+    // Show the banner while the app is in the foreground too
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,

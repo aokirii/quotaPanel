@@ -13,7 +13,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Menü çubuğundaki kompakt etikette kullanılan kısa ad
+    /// Short name used in the compact menu bar label
     var shortLabel: String {
         switch self {
         case .claude: "C"
@@ -22,11 +22,11 @@ enum Provider: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-/// Tek bir limit penceresi: ör. "5 saatlik oturum" veya "haftalık"
+/// One rate-limit window: e.g. the 5-hour session or the weekly window
 struct RateWindow: Identifiable, Equatable {
     var id: String { label }
     let label: String
-    /// 0...100 arası doluluk yüzdesi
+    /// Fill percentage, 0...100
     let percent: Double
     let resetsAt: Date?
 
@@ -36,7 +36,7 @@ struct RateWindow: Identifiable, Equatable {
 enum SnapshotStatus: Equatable {
     case loading
     case ok
-    /// Kimlik bilgisi yok ya da süresi dolmuş; kullanıcıya CLI'ı çalıştırması söylenir
+    /// Credentials missing or expired; the user is told how to sign in
     case authProblem(String)
     case error(String)
 }
@@ -52,7 +52,7 @@ struct ProviderSnapshot: Equatable {
         ProviderSnapshot(provider: provider, status: .loading, windows: [], planName: nil, updatedAt: nil)
     }
 
-    /// Menü çubuğu etiketi için en dolu pencere
+    /// Fullest window, used for the menu bar label
     var worstWindow: RateWindow? {
         windows.max(by: { $0.percent < $1.percent })
     }

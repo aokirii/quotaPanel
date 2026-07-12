@@ -1,11 +1,11 @@
 import SwiftUI
 import Charts
 
-/// Son 14 günün bar grafiği: Claude için USD, Codex için token
+/// Bar chart of the last 14 days: USD for Claude, tokens for Codex
 struct CostChartView: View {
     let title: String
     let stats: [DailyStat]
-    /// true → costUSD çizilir; false → tokens çizilir
+    /// true → plots costUSD; false → plots tokens
     let showCost: Bool
 
     private var recent: [DailyStat] {

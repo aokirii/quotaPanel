@@ -1,11 +1,11 @@
 import Foundation
 
-/// Açık Claude Code oturumlarının bağlam penceresi doluluğunu okur.
+/// Reads the context-window fill of open Claude Code sessions.
 ///
-/// Açık oturumlar `~/.claude/sessions/<pid>.json` kayıt defterinden gelir: her
-/// canlı süreç kendi kaydını yazar ve temiz çıkışta siler, bu yüzden pid'in
-/// yaşadığını doğrulamak yeterli. Kayıt defteri yoksa (eski Claude Code) son
-/// 15 dakikada yazılmış jsonl'lara, o da yoksa en yenisine düşülür.
+/// Open sessions come from the `~/.claude/sessions/<pid>.json` registry: every
+/// live process writes its own entry and removes it on clean exit, so checking
+/// that the pid is alive is enough. Without a registry (older Claude Code) it
+/// falls back to jsonl files written in the last 15 minutes, then the newest.
 enum ClaudeContextReader {
     static func contexts(maxSessions: Int = 3, activeMinutes: TimeInterval = 15) async -> [ContextSnapshot] {
         await Task.detached(priority: .utility) {
@@ -43,9 +43,9 @@ enum ClaudeContextReader {
         return (paths ?? []).prefix(maxSessions).compactMap { readContext(url: $0, home: home) }
     }
 
-    /// Kayıt defterindeki canlı oturumların jsonl yolları, en yeni etkinlik önde.
-    /// Kayıt dizini yoksa nil (çağıran mtime fallback'ine düşer); boş liste
-    /// "defter var ama açık oturum yok" demektir.
+    /// jsonl paths of live sessions in the registry, most recent activity first.
+    /// nil when the registry directory is missing (caller falls back to mtime);
+    /// an empty list means "registry exists but no open sessions".
     private nonisolated static func registrySessionPaths(home: URL, jsonlByID: [String: URL]) -> [URL]? {
         let dir = home.appendingPathComponent(".claude/sessions")
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
@@ -65,15 +65,15 @@ enum ClaudeContextReader {
         return entries.sorted { $0.order > $1.order }.map(\.url)
     }
 
-    /// Temiz çıkış kaydı sildiği için yalın canlılık kontrolü yeterli;
-    /// EPERM "yaşıyor ama başka kullanıcının" demektir
+    /// A plain liveness check suffices since clean exits remove the entry;
+    /// EPERM means "alive but owned by another user"
     private nonisolated static func processIsAlive(_ pid: Int) -> Bool {
         if kill(pid_t(pid), 0) == 0 { return true }
         return errno == EPERM
     }
 
-    /// Tek oturumun bağlam okuması: doluluk son mesajın usage'ından, bileşim ise
-    /// oturum-kümülatif girdi/önbellek-yazma/çıktı toplamlarından gelir
+    /// Context reading for one session: fill comes from the last message's
+    /// usage, composition from session-cumulative input/cache-write/output totals
     private nonisolated static func readContext(url: URL, home: URL) -> ContextSnapshot? {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
 
@@ -96,8 +96,8 @@ enum ClaudeContextReader {
             parts.input += usage["input_tokens"] as? Int ?? 0
             parts.cache += UsageHistoryScanner.cacheWriteTokens(usage)
             parts.output += usage["output_tokens"] as? Int ?? 0
-            // Sentetik/boş kayıtlar (ör. limit uyarı mesajları) pencere doluluğunu
-            // temsil etmez; "son" işaretçisi yalnızca gerçek usage'a ilerler
+            // Synthetic/empty records (e.g. limit warnings) don't represent window
+            // fill; the "last" pointer only advances on real usage
             guard windowTokens(usage) > 0 else { continue }
             lastUsage = usage
             lastModel = message["model"] as? String ?? lastModel
@@ -107,7 +107,8 @@ enum ClaudeContextReader {
 
         let used = windowTokens(usage)
         let workCwd = lastCwd.isEmpty ? cwd : lastCwd
-        let limit = contextLimit(used: used, model: configuredModel(cwd: cwd.isEmpty ? workCwd : cwd, home: home))
+        let settingsCwd = cwd.isEmpty ? workCwd : cwd
+        let limit = contextLimit(used: used, model: configuredModel(cwd: settingsCwd, home: home))
 
         return ContextSnapshot(
             id: url.path,
@@ -115,12 +116,15 @@ enum ClaudeContextReader {
             model: lastModel,
             used: used,
             limit: limit,
-            parts: parts
+            parts: parts,
+            effort: configuredEffort(cwd: settingsCwd, home: home)
+            // mode deliberately empty: Claude Code doesn't record modes like
+            // ultracode anywhere structured; text search gives false positives
         )
     }
 
-    /// Bir usage kaydının pencerede kapladığı toplam: girdi + çıktı +
-    /// önbellek-yazma + önbellek-okuma
+    /// Total window occupancy of one usage record: input + output +
+    /// cache-write + cache-read
     private nonisolated static func windowTokens(_ usage: [String: Any]) -> Int {
         (usage["input_tokens"] as? Int ?? 0)
             + (usage["output_tokens"] as? Int ?? 0)
@@ -128,8 +132,18 @@ enum ClaudeContextReader {
             + (usage["cache_read_input_tokens"] as? Int ?? 0)
     }
 
-    /// Claude Code'un kendi öncelik sırası: proje ayarları kullanıcı ayarlarını ezer
+    /// Claude Code's own precedence: project settings override user settings
     private nonisolated static func configuredModel(cwd: String, home: URL) -> String {
+        settingsValue("model", cwd: cwd, home: home) ?? ""
+    }
+
+    /// Reasoning effort (`effortLevel`); Claude Code stores this in settings,
+    /// not per session
+    private nonisolated static func configuredEffort(cwd: String, home: URL) -> String? {
+        settingsValue("effortLevel", cwd: cwd, home: home)
+    }
+
+    private nonisolated static func settingsValue(_ key: String, cwd: String, home: URL) -> String? {
         var candidates: [URL] = []
         if !cwd.isEmpty {
             let base = URL(fileURLWithPath: cwd).appendingPathComponent(".claude")
@@ -140,15 +154,15 @@ enum ClaudeContextReader {
         for url in candidates {
             guard let data = try? Data(contentsOf: url),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let model = obj["model"] as? String, !model.isEmpty
+                  let value = obj[key] as? String, !value.isEmpty
             else { continue }
-            return model
+            return value
         }
-        return ""
+        return nil
     }
 
-    /// '[1m]' beta'sı 1M pencere demek; değilse 200k katmanı, gözlenen kullanım
-    /// 200k'yı aşınca 1M'ye yükselir — Claude Code'un sunduğu iki katman
+    /// The '[1m]' beta means a 1M window; otherwise the 200k tier, upgraded
+    /// to 1M once observed usage exceeds 200k — the two tiers Claude Code offers
     private nonisolated static func contextLimit(used: Int, model: String) -> Int {
         if model.lowercased().contains("1m") { return 1_000_000 }
         return used > 200_000 ? 1_000_000 : 200_000

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Token tipi segment renkleri (ai-token-tracker ile aynı)
+/// Token-type segment colors (same as ai-token-tracker)
 enum PartColors {
     static let input = Color(red: 0.91, green: 0.52, blue: 0.23)   // #e8843a
     static let cache = Color(red: 0.24, green: 0.65, blue: 0.44)   // #3ea76f
@@ -16,8 +16,8 @@ extension Provider {
     }
 }
 
-/// Doluluğu `percent` olan, girdi/önbellek/çıktı segmentlerine bölünmüş çubuk.
-/// `parts` nil ya da boşsa tek renkli dolgu çizilir.
+/// Bar filled to `percent`, split into input/cache/output segments.
+/// Draws a solid fill when `parts` is nil or empty.
 struct SegmentedBarView: View {
     let percent: Double
     let parts: TokenParts?
@@ -45,7 +45,7 @@ struct SegmentedBarView: View {
     }
 }
 
-/// "girdi %2 · önbellek %19 · çıktı %6" satırı — her pay `percent`'e ölçekli
+/// "input 2% · cache 19% · output 6%" row — each share scaled to `percent`
 struct PartsCaptionView: View {
     let parts: TokenParts
     let percent: Double

@@ -1,17 +1,17 @@
 import Foundation
 import Observation
 
-/// UserDefaults destekli kullanıcı ayarları
+/// User settings backed by UserDefaults
 @MainActor
 @Observable
 final class Settings {
     static let maxAlertThresholds = 6
 
-    /// Yenileme aralığı, saniye (30 sn adımlarla ayarlanır)
+    /// Refresh interval in seconds (adjusted in 30 s steps)
     var refreshSeconds: Int {
         didSet { UserDefaults.standard.set(refreshSeconds, forKey: "refreshSeconds") }
     }
-    /// Doluluk uyarı eşikleri (%). Boş liste bildirimleri kapatır.
+    /// Usage alert thresholds (%). An empty list disables notifications.
     var alertThresholds: [Double] {
         didSet { UserDefaults.standard.set(alertThresholds, forKey: "alertThresholds") }
     }
@@ -21,15 +21,15 @@ final class Settings {
     var codexEnabled: Bool {
         didSet { UserDefaults.standard.set(codexEnabled, forKey: "codexEnabled") }
     }
-    /// Menü çubuğunda yüzde metni gösterilsin mi (kapalıysa sadece ikon)
+    /// Whether to show the percent text in the menu bar (icon only when off)
     var showPercentInMenuBar: Bool {
         didSet { UserDefaults.standard.set(showPercentInMenuBar, forKey: "showPercentInMenuBar") }
     }
 
     init() {
         let d = UserDefaults.standard
-        // Eski kurulumlardan geçiş: refreshMinutes → refreshSeconds,
-        // warnThreshold/criticalThreshold çifti → eşik listesi
+        // Migration from older installs: refreshMinutes → refreshSeconds,
+        // warnThreshold/criticalThreshold pair → threshold list
         if let seconds = d.object(forKey: "refreshSeconds") as? Int {
             self.refreshSeconds = seconds
         } else if let minutes = d.object(forKey: "refreshMinutes") as? Int {
@@ -49,7 +49,7 @@ final class Settings {
         self.showPercentInMenuBar = d.object(forKey: "showPercentInMenuBar") as? Bool ?? true
     }
 
-    /// "30 s", "5 min", "1.5 min" biçiminde aralık etiketi
+    /// Interval label like "30 s", "5 min", "1.5 min"
     var refreshLabel: String {
         if refreshSeconds < 60 { return "\(refreshSeconds) s" }
         if refreshSeconds % 60 == 0 { return "\(refreshSeconds / 60) min" }
