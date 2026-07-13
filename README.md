@@ -127,5 +127,10 @@ linux/                    # experimental GNOME Shell port (Swift daemon + extens
 
 ## Credits
 
-- Inspired by [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger; provider icons are from CodexBar (MIT licensed).
-- Context/summary/heatmap feature set inspired by [ai-token-tracker](https://github.com/aokirii/ai-token-tracker).
+QuotaPanel is the **successor to [ai-token-tracker](https://github.com/aokirii/ai-token-tracker)** — the same author's earlier usage tracker. Its context, summary, and heatmap views live on here, rebuilt into a native menu bar app that also tracks official rate limits across 23 providers.
+
+- Provider icons and menu bar approach inspired by [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger (MIT licensed).
+
+## License
+
+Released under the [MIT License](LICENSE). Bundled provider icons originate from [CodexBar](https://github.com/steipete/CodexBar), which is also MIT licensed.
