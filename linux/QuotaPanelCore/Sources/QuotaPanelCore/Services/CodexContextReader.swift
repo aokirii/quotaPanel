@@ -5,8 +5,9 @@ import Foundation
 /// Codex has no open-session registry; the liveness signal is a running
 /// interactive `codex` process. No process → no bars (no stale fallback).
 /// If the process list can't be read, falls back to rollouts written in the
-/// last 15 minutes, then the newest. Ported from the macOS app; pgrep/ps are
-/// resolved through /usr/bin/env since their location differs per distro.
+/// last 15 minutes, then the newest. Ported from the macOS app; on POSIX
+/// pgrep/ps are resolved through /usr/bin/env since their location differs
+/// per distro, on Windows the command lines come from a WMI query.
 enum CodexContextReader {
     static func contexts(maxSessions: Int = 3, activeMinutes: TimeInterval = 15) -> [ContextSnapshot] {
         if codexRunning() == false { return [] }
@@ -35,25 +36,55 @@ enum CodexContextReader {
 
     /// true: an interactive codex is running; false: none; nil: can't tell
     private static func codexRunning() -> Bool? {
+        #if os(Windows)
+        // WQL LIKE does the pgrep -f part; the TUI check runs on each line.
+        guard let out = run([
+            "-NoProfile", "-Command",
+            "(Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%codex%'\").CommandLine",
+        ]) else { return nil }
+        for line in out.split(separator: "\n") {
+            let argv = line.replacingOccurrences(of: "\"", with: " ")
+                .split(separator: " ").map(String.init)
+            if argvIsCodexTUI(argv) { return true }
+        }
+        return false
+        #else
         guard let pidsOut = run(["pgrep", "-f", "codex"]) else { return nil }
         for pid in pidsOut.split(separator: "\n").map(String.init) where Int(pid) != nil {
             guard let command = run(["ps", "-o", "command=", "-p", pid]) else { continue }
             if argvIsCodexTUI(command.split(separator: " ").map(String.init)) { return true }
         }
         return false
+        #endif
     }
 
     /// Recognizes the interactive Codex CLI (TUI); helpers like
     /// `codex app-server` don't count as open sessions
     private static func argvIsCodexTUI(_ argv: [String]) -> Bool {
         guard !argv.isEmpty, !argv.contains("app-server") else { return false }
-        if URL(fileURLWithPath: argv[0]).lastPathComponent == "codex" { return true }
-        return argv.dropFirst().contains { $0 == "codex" || $0.hasSuffix("/codex") }
+        if isCodexPath(argv[0]) { return true }
+        return argv.dropFirst().contains { $0 == "codex" || $0.hasSuffix("/codex") || isCodexPath($0) }
     }
 
+    /// The basename is `codex`, ignoring case and Windows launcher extensions.
+    private static func isCodexPath(_ s: String) -> Bool {
+        var name = URL(fileURLWithPath: s.replacingOccurrences(of: "\\", with: "/"))
+            .lastPathComponent.lowercased()
+        for ext in [".exe", ".cmd", ".bat"] where name.hasSuffix(ext) {
+            name = String(name.dropLast(ext.count))
+        }
+        return name == "codex"
+    }
+
+    /// POSIX: `/usr/bin/env <argv>`. Windows: `powershell.exe <argv>`.
     private static func run(_ argv: [String]) -> String? {
         let process = Process()
+        #if os(Windows)
+        let sysRoot = ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:/Windows"
+        process.executableURL = URL(fileURLWithPath: "\(sysRoot)/System32/WindowsPowerShell/v1.0/powershell.exe")
+        #else
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        #endif
         process.arguments = argv
         let stdout = Pipe()
         process.standardOutput = stdout

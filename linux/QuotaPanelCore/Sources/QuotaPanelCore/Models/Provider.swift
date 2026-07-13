@@ -140,6 +140,9 @@ public enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .copilot: candidates = [
             "\(Paths.configHome)/github-copilot/apps.json",
             "\(Paths.configHome)/github-copilot/hosts.json",
+            // Windows: Copilot's CLI/editors write under %LOCALAPPDATA%
+            "\(Paths.dataHome)/github-copilot/apps.json",
+            "\(Paths.dataHome)/github-copilot/hosts.json",
         ]
         case .droid:
             if ProcessInfo.processInfo.environment["FACTORY_API_KEY"]?.isEmpty == false { return true }

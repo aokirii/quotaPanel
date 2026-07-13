@@ -3,6 +3,9 @@ import Foundation
 #if canImport(Glibc)
 import Glibc
 #endif
+#if canImport(WinSDK)
+import WinSDK
+#endif
 
 /// Loads `KEY=value` lines from `~/.config/quotapanel/env` into the process
 /// environment. This is the same file the README points the systemd unit's
@@ -30,7 +33,22 @@ public enum EnvFile {
                 value = String(value.dropFirst().dropLast())
             }
             guard !key.isEmpty else { continue }
-            setenv(key, value, 0)
+            setIfUnset(key, value)
         }
+    }
+
+    /// `setenv(key, value, 0)` semantics on every platform: never overwrites
+    /// a variable that is already set.
+    private static func setIfUnset(_ key: String, _ value: String) {
+        #if os(Windows)
+        guard ProcessInfo.processInfo.environment[key] == nil else { return }
+        key.withCString(encodedAs: UTF16.self) { k in
+            value.withCString(encodedAs: UTF16.self) { v in
+                _ = SetEnvironmentVariableW(k, v)
+            }
+        }
+        #else
+        setenv(key, value, 0)
+        #endif
     }
 }

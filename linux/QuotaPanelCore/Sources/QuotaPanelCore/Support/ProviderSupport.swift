@@ -9,8 +9,13 @@ enum ProviderSupport {
     static var home: String { Paths.home }
 
     /// A desktop-Chrome User-Agent, expected by several cookie/session endpoints.
+    #if os(Windows)
+    static let chromeUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+    #else
     static let chromeUserAgent =
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+    #endif
 
     /// Trim whitespace and strip one pair of surrounding quotes.
     static func clean(_ raw: String) -> String {
@@ -38,6 +43,19 @@ enum ProviderSupport {
 
     /// Resolve a CLI by name across the usual install dirs plus $PATH.
     static func which(_ name: String) -> String? {
+        #if os(Windows)
+        // %Path% is ;-separated and executables carry a launcher extension
+        // (npm CLIs install as .cmd shims).
+        let e = ProcessInfo.processInfo.environment
+        let dirs = (e["Path"] ?? e["PATH"] ?? "").split(separator: ";").map(String.init)
+        for dir in dirs where !dir.isEmpty {
+            for ext in ["", ".exe", ".cmd", ".bat"] {
+                let candidate = "\(dir)/\(name)\(ext)"
+                if FileManager.default.fileExists(atPath: candidate) { return candidate }
+            }
+        }
+        return nil
+        #else
         let extras = ["/usr/local/bin", "/usr/bin", "\(home)/.local/bin", "\(home)/bin"]
         let path = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
         for dir in extras + path {
@@ -45,13 +63,25 @@ enum ProviderSupport {
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         return nil
+        #endif
     }
 
     /// Run a command with a hard timeout. Returns stdout (or nil on
     /// launch failure/timeout). Intended for small outputs only.
     @discardableResult
     static func run(_ path: String, _ args: [String], extraEnv: [String: String] = [:], timeout: TimeInterval = 15) -> String? {
+        #if os(Windows)
+        // cmd/bat shims can't be exec'd directly — relaunch through cmd.exe
+        // (cmd.exe itself ends in .exe, so this recurses at most once).
+        let lower = path.lowercased()
+        if lower.hasSuffix(".cmd") || lower.hasSuffix(".bat") {
+            let sysRoot = ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:/Windows"
+            return run("\(sysRoot)/System32/cmd.exe", ["/d", "/c", path] + args, extraEnv: extraEnv, timeout: timeout)
+        }
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        #else
         guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
+        #endif
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args

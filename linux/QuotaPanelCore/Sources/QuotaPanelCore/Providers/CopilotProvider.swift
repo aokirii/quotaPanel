@@ -49,10 +49,13 @@ enum CopilotProvider {
     /// `oauth_token`. apps.json keys look like "github.com:Iv23…"; the older
     /// hosts.json uses a bare "github.com".
     static func loadToken() -> String? {
-        let files = [
-            URL(fileURLWithPath: "\(Paths.configHome)/github-copilot/apps.json"),
-            URL(fileURLWithPath: "\(Paths.configHome)/github-copilot/hosts.json"),
-        ]
+        // configHome covers Linux (~/.config); on Windows Copilot's CLI/editors
+        // write under %LOCALAPPDATA% (= dataHome), so probe both.
+        var files: [URL] = []
+        for dir in ["\(Paths.configHome)/github-copilot", "\(Paths.dataHome)/github-copilot"] {
+            files.append(URL(fileURLWithPath: "\(dir)/apps.json"))
+            files.append(URL(fileURLWithPath: "\(dir)/hosts.json"))
+        }
         for url in files {
             guard let data = try? Data(contentsOf: url),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

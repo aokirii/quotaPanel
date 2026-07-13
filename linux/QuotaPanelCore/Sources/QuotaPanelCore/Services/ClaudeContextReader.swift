@@ -3,6 +3,9 @@ import Foundation
 #if canImport(Glibc)
 import Glibc
 #endif
+#if canImport(WinSDK)
+import WinSDK
+#endif
 
 /// Reads the context-window fill of open Claude Code sessions.
 ///
@@ -10,7 +13,8 @@ import Glibc
 /// live process writes its own entry and removes it on clean exit, so checking
 /// that the pid is alive is enough. Without a registry (older Claude Code) it
 /// falls back to jsonl files written in the last 15 minutes, then the newest.
-/// Ported from the macOS app; `kill(pid, 0)` liveness works identically here.
+/// Ported from the macOS app; liveness is `kill(pid, 0)` on POSIX and
+/// `OpenProcess` on Windows.
 enum ClaudeContextReader {
     static func contexts(maxSessions: Int = 3, activeMinutes: TimeInterval = 15) -> [ContextSnapshot] {
         let home = URL(fileURLWithPath: Paths.home)
@@ -65,10 +69,23 @@ enum ClaudeContextReader {
     }
 
     /// A plain liveness check suffices since clean exits remove the entry;
-    /// EPERM means "alive but owned by another user"
+    /// "alive but owned by another user" (EPERM / access denied) counts as alive
     private static func processIsAlive(_ pid: Int) -> Bool {
+        #if os(Windows)
+        // 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION (spelled out: the macro
+        // doesn't import cleanly). A NULL handle with ERROR_ACCESS_DENIED (5)
+        // is the EPERM analog. 259 = STILL_ACTIVE.
+        guard let handle = OpenProcess(DWORD(0x1000), false, DWORD(pid)) else {
+            return GetLastError() == DWORD(5)
+        }
+        defer { CloseHandle(handle) }
+        var code = DWORD(0)
+        if GetExitCodeProcess(handle, &code) == false { return true }
+        return code == DWORD(259)
+        #else
         if kill(pid_t(pid), 0) == 0 { return true }
         return errno == EPERM
+        #endif
     }
 
     /// Context reading for one session: fill comes from the last message's

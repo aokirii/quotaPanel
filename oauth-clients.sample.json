@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy this file to ~/.quotapanel/oauth-clients.json (macOS) or ~/.config/quotapanel/oauth-clients.json (Linux), then fill in the public client credentials each upstream CLI ships. See README -> 'OAuth client configuration'. This file is git-ignored; never commit the filled-in copy.",
+  "_comment": "Copy this file to ~/.quotapanel/oauth-clients.json (macOS), ~/.config/quotapanel/oauth-clients.json (Linux), or %APPDATA%\\quotapanel\\oauth-clients.json (Windows), then fill in the public client credentials each upstream CLI ships. See README -> 'OAuth client configuration'. This file is git-ignored; never commit the filled-in copy.",
   "gemini": {
     "clientId": "PASTE_GEMINI_CLI_OAUTH_CLIENT_ID.apps.googleusercontent.com",
     "clientSecret": "PASTE_GEMINI_CLI_OAUTH_CLIENT_SECRET"

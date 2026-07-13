@@ -1,6 +1,6 @@
 # QuotaPanel
 
-QuotaPanel keeps an eye on your AI coding-tool usage quotas — Claude Code, Codex, Gemini, Copilot, and 20+ other providers — from the macOS menu bar or the GNOME top bar on Linux. It shows the rate-limit windows each provider's own service reports in a single panel, together with open-session context usage, cost estimates, and usage history. No API keys required.
+QuotaPanel keeps an eye on your AI coding-tool usage quotas — Claude Code, Codex, Gemini, Copilot, and 20+ other providers — from the macOS menu bar, the GNOME top bar on Linux, or the Windows system tray. It shows the rate-limit windows each provider's own service reports in a single panel, together with open-session context usage, cost estimates, and usage history. No API keys required.
 
 <p align="center">
   <img src="docs/panel-live.png" width="340" alt="QuotaPanel">
@@ -10,6 +10,7 @@ QuotaPanel keeps an eye on your AI coding-tool usage quotas — Claude Code, Cod
 
 - **macOS** — macOS 14 or newer (Apple Silicon) and the Xcode Command Line Tools (`xcode-select --install`).
 - **Linux** — GNOME Shell 45–49. The installer takes care of everything else.
+- **Windows** — Windows 10/11 and the [Swift toolchain](https://www.swift.org/install/windows/) (the installer can fetch it via winget). The tray app itself compiles with the C# compiler Windows ships in-box — no .NET SDK needed.
 
 ## Installation
 
@@ -34,7 +35,19 @@ linux/install.sh
 
 When the script finishes, reload GNOME Shell once — Xorg: press `Alt`+`F2`, type `r`, press Enter; Wayland: log out and back in. The QuotaPanel icon then appears in the top bar.
 
-To update on either platform, pull the latest changes and run the same build or install command again.
+### Windows — experimental, not yet tested
+
+```powershell
+git clone https://github.com/aokirii/quotaPanel.git
+cd quotaPanel
+powershell -ExecutionPolicy Bypass -File windows\install.ps1
+```
+
+The script builds the same portable Swift daemon the Linux port uses, compiles the tray app, installs both under `%LOCALAPPDATA%\QuotaPanel`, and starts it — the QuotaPanel icon appears in the system tray. Right-click it to enable *Start with Windows*. For Gemini/Codex token refresh, copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to `%APPDATA%\quotapanel\oauth-clients.json` and fill it in.
+
+> **Status:** code-complete first pass, not yet built or tested on real Windows hardware.
+
+To update on any platform, pull the latest changes and run the same build or install command again.
 
 ## Usage
 
