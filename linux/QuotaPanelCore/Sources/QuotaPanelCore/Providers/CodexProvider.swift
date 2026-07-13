@@ -67,8 +67,26 @@ enum CodexProvider {
     }
 
     static func fetch() async -> ProviderSnapshot {
+        // In-app sign-in (the shared ~/.quotapanel store written by the
+        // QuotaPanel front-ends) takes priority over the CLI's auth.json.
+        if var stored = CredentialStore.load("codex") {
+            if stored.isExpired, let renewed = await refreshStored(stored) {
+                stored = renewed
+                CredentialStore.save(stored, for: "codex")
+            }
+            if !stored.isExpired {
+                let creds = Credentials(
+                    accessToken: stored.accessToken,
+                    accountId: stored.accountId,
+                    expiresAt: stored.expiresAt,
+                    refreshToken: stored.refreshToken
+                )
+                return await fetchUsage(creds, canRetryAuth: true)
+            }
+            // dead in-app token: fall through to the CLI credentials
+        }
         guard var creds = loadCredentials() else {
-            return snapshot(.authProblem("No credentials — run `codex` once to sign in"))
+            return snapshot(.authProblem("No credentials — sign in from Settings or run `codex` once"))
         }
 
         if creds.isExpired {
@@ -118,6 +136,38 @@ enum CodexProvider {
         } catch {
             return snapshot(.error("Network error: \(error.localizedDescription)"))
         }
+    }
+
+    /// refresh_token flow for the in-app credentials; unlike auth.json the
+    /// ~/.quotapanel store is ours, so the caller persists the result back.
+    private static func refreshStored(_ creds: StoredCredentials) async -> StoredCredentials? {
+        guard let refreshToken = creds.refreshToken, !refreshToken.isEmpty else { return nil }
+
+        var request = URLRequest(url: refreshURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: String] = [
+            "client_id": clientID,
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "scope": "openid profile email",
+        ]
+        guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        request.httpBody = payload
+
+        guard let (data, response) = try? await HTTP.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["access_token"] as? String, !token.isEmpty
+        else { return nil }
+
+        var renewed = creds
+        renewed.accessToken = token
+        if let fresh = json["refresh_token"] as? String, !fresh.isEmpty { renewed.refreshToken = fresh }
+        if let idToken = json["id_token"] as? String, !idToken.isEmpty { renewed.idToken = idToken }
+        if let seconds = json["expires_in"] as? Double { renewed.expiresAt = Date(timeIntervalSinceNow: seconds) }
+        return renewed
     }
 
     /// refresh_token flow via auth.openai.com; on success the new token is

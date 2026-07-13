@@ -39,7 +39,7 @@ namespace QuotaPanel
         private static extern bool SetProcessDPIAware();
 
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             bool createdNew;
             // One instance is enough; a second launch just exits.
@@ -49,7 +49,7 @@ namespace QuotaPanel
             try { SetProcessDPIAware(); } catch (Exception) { }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new TrayContext());
+            Application.Run(new TrayContext(args));
             GC.KeepAlive(mutex);
         }
     }
@@ -532,14 +532,15 @@ namespace QuotaPanel
         public static readonly Color Text = ColorTranslator.FromHtml("#e8e8ec");
         public static readonly Color SubText = ColorTranslator.FromHtml("#9a9aa5");
         public static readonly Color Accent = ColorTranslator.FromHtml("#8ab4f8");
-        public static readonly Color Green = ColorTranslator.FromHtml("#33d17a");
-        public static readonly Color Yellow = ColorTranslator.FromHtml("#f6d32d");
+        // severity ramp — same values as the GNOME extension / macOS UsageMeterView
+        public static readonly Color Green = ColorTranslator.FromHtml("#2ec27e");
+        public static readonly Color Yellow = ColorTranslator.FromHtml("#e5c07b");
         public static readonly Color Orange = ColorTranslator.FromHtml("#ff7800");
-        public static readonly Color Red = ColorTranslator.FromHtml("#e01b24");
-        // token composition (input / cache / output), matching the other shells
-        public static readonly Color PartInput = ColorTranslator.FromHtml("#8ab4f8");
-        public static readonly Color PartCache = ColorTranslator.FromHtml("#b48af8");
-        public static readonly Color PartOutput = ColorTranslator.FromHtml("#5fd0a5");
+        public static readonly Color Red = ColorTranslator.FromHtml("#e5484d");
+        // token composition (input / cache / output) — extension.js PART_COLORS
+        public static readonly Color PartInput = ColorTranslator.FromHtml("#e8843a");
+        public static readonly Color PartCache = ColorTranslator.FromHtml("#3ea76f");
+        public static readonly Color PartOutput = ColorTranslator.FromHtml("#e6cf4f");
         // GitHub-style heat ramp, level 0...4
         public static readonly Color[] Heat = new Color[]
         {
@@ -554,7 +555,15 @@ namespace QuotaPanel
         {
             if (percent >= 95) return Red;
             if (percent >= 80) return Orange;
-            if (percent >= 60) return Yellow;
+            if (percent >= 50) return Yellow;
+            return Green;
+        }
+
+        /// Context bars use their own (harsher) ramp, like the other shells.
+        public static Color ContextColor(double percent)
+        {
+            if (percent >= 90) return Red;
+            if (percent >= 70) return Orange;
             return Green;
         }
 
@@ -564,12 +573,20 @@ namespace QuotaPanel
             catch (Exception) { return Color.Gray; }
         }
 
+        /// Brand color adjusted for glyph tinting on the dark panel: near-black
+        /// brands (manus #34322d) would vanish, so they get the light neutral
+        /// the GNOME extension uses.
+        public static Color GlyphTint(Color brand)
+        {
+            var lum = (0.299 * brand.R + 0.587 * brand.G + 0.114 * brand.B) / 255.0;
+            return lum < 0.2 ? ColorTranslator.FromHtml("#b5b2a8") : brand;
+        }
+
         public static string Percent(double p)
         {
-            var rounded1 = Math.Round(p, 1);
-            if (Math.Abs(rounded1 - Math.Round(p)) >= 0.05)
-                return rounded1.ToString("0.0", CultureInfo.InvariantCulture) + "%";
-            return Math.Round(p).ToString(CultureInfo.InvariantCulture) + "%";
+            // Always fractional ("8.1%", "88.0%") — matches the macOS habit of
+            // suffix-form decimal percentages.
+            return Math.Round(p, 1).ToString("0.0", CultureInfo.InvariantCulture) + "%";
         }
 
         public static string Tokens(long t)
@@ -600,6 +617,1138 @@ namespace QuotaPanel
         }
     }
 
+    // ============================================================ draw helpers
+
+    static class Draw
+    {
+        public static GraphicsPath Rounded(Rectangle rect, int radius)
+        {
+            var path = new GraphicsPath();
+            var d = Math.Min(radius * 2, Math.Min(rect.Width, rect.Height));
+            if (d < 2) { path.AddRectangle(rect); return path; }
+            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        public static void FillRounded(Graphics g, Brush brush, Rectangle rect, int radius)
+        {
+            if (rect.Width <= 0 || rect.Height <= 0) return;
+            using (var path = Rounded(rect, radius)) g.FillPath(brush, path);
+        }
+
+        /// Fills the input/cache/output composition segments inside a
+        /// rounded-clipped bar.
+        public static void FillSegments(Graphics g, Rectangle bar, int radius, Parts parts)
+        {
+            if (bar.Width <= 0 || parts == null || parts.Total <= 0) return;
+            using (var clip = Rounded(bar, radius))
+            {
+                g.SetClip(clip, CombineMode.Intersect);
+                long total = parts.Total;
+                int xi = bar.X;
+                int wi = (int)Math.Round(bar.Width * (double)parts.Input / total);
+                int wc = (int)Math.Round(bar.Width * (double)parts.Cache / total);
+                int wo = bar.Width - wi - wc;
+                if (wi > 0) using (var b = new SolidBrush(Theme.PartInput)) g.FillRectangle(b, xi, bar.Y, wi, bar.Height);
+                xi += wi;
+                if (wc > 0) using (var b = new SolidBrush(Theme.PartCache)) g.FillRectangle(b, xi, bar.Y, wc, bar.Height);
+                xi += wc;
+                if (wo > 0) using (var b = new SolidBrush(Theme.PartOutput)) g.FillRectangle(b, xi, bar.Y, wo, bar.Height);
+                g.ResetClip();
+            }
+        }
+    }
+
+    // ============================================================= svg glyphs
+
+    /// Minimal renderer for the repo's ProviderIcon-*.svg brand glyphs — the
+    /// same files the macOS app and the GNOME extension use (flat paths,
+    /// mostly white = tinted with the brand color at draw time). Not a
+    /// general SVG engine: it supports exactly what those files contain
+    /// (path data M/L/H/V/C/S/Q/T/A/Z, viewBox, per-path solid fills).
+    static class SvgIcon
+    {
+        class Shape
+        {
+            public GraphicsPath Path;
+            public Color Fill;
+            public bool UseTint;
+        }
+
+        class Glyph
+        {
+            public float MinX, MinY, W, H;
+            public List<Shape> Shapes;
+        }
+
+        static readonly Dictionary<string, Glyph> cache = new Dictionary<string, Glyph>();
+
+        public static bool Has(string id) { return Get(id) != null; }
+
+        /// Draws the glyph tinted into rect; false = no svg, caller falls back.
+        public static bool Draw(Graphics g, string id, RectangleF rect, Color tint)
+        {
+            var glyph = Get(id);
+            if (glyph == null || glyph.W <= 0 || glyph.H <= 0) return false;
+            float scale = Math.Min(rect.Width / glyph.W, rect.Height / glyph.H);
+            float ox = rect.X + (rect.Width - glyph.W * scale) / 2f - glyph.MinX * scale;
+            float oy = rect.Y + (rect.Height - glyph.H * scale) / 2f - glyph.MinY * scale;
+            using (var m = new Matrix())
+            {
+                m.Translate(ox, oy);
+                m.Scale(scale, scale);
+                foreach (var s in glyph.Shapes)
+                {
+                    using (var path = (GraphicsPath)s.Path.Clone())
+                    {
+                        path.Transform(m);
+                        using (var b = new SolidBrush(s.UseTint ? tint : s.Fill))
+                            g.FillPath(b, path);
+                    }
+                }
+            }
+            return true;
+        }
+
+        static Glyph Get(string id)
+        {
+            Glyph cached;
+            if (cache.TryGetValue(id, out cached)) return cached;
+            Glyph glyph = null;
+            try
+            {
+                var file = FindFile(id);
+                if (file != null) glyph = Parse(File.ReadAllText(file));
+            }
+            catch (Exception) { glyph = null; }
+            cache[id] = glyph;
+            return glyph;
+        }
+
+        static string FindFile(string id)
+        {
+            var name = "ProviderIcon-" + id + ".svg";
+            var candidates = new List<string>();
+            var exeDir = Path.GetDirectoryName(Application.ExecutablePath);
+            if (exeDir != null)
+            {
+                candidates.Add(Path.Combine(exeDir, "icons", name));
+                candidates.Add(Path.Combine(exeDir, "..", "..", "Resources", name));  // repo checkout
+            }
+            var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (!string.IsNullOrEmpty(localAppData))
+                candidates.Add(Path.Combine(localAppData, "QuotaPanel", "icons", name));
+            foreach (var c in candidates)
+            {
+                try { if (File.Exists(c)) return c; }
+                catch (Exception) { }
+            }
+            return null;
+        }
+
+        static Glyph Parse(string svg)
+        {
+            var glyph = new Glyph();
+            glyph.Shapes = new List<Shape>();
+
+            var vb = System.Text.RegularExpressions.Regex.Match(svg, "viewBox=\"([^\"]+)\"");
+            if (vb.Success)
+            {
+                var parts = vb.Groups[1].Value.Split(new char[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 4)
+                {
+                    glyph.MinX = ParseF(parts[0]);
+                    glyph.MinY = ParseF(parts[1]);
+                    glyph.W = ParseF(parts[2]);
+                    glyph.H = ParseF(parts[3]);
+                }
+            }
+            if (glyph.W <= 0 || glyph.H <= 0)
+            {
+                glyph.W = ParseF(Attr(svg, "width"));
+                glyph.H = ParseF(Attr(svg, "height"));
+                if (glyph.W <= 0 || glyph.H <= 0) return null;
+            }
+
+            foreach (System.Text.RegularExpressions.Match m in
+                     System.Text.RegularExpressions.Regex.Matches(svg, "<path\\b[^>]*>"))
+            {
+                var tag = m.Value;
+                var d = Attr(tag, "d");
+                if (string.IsNullOrEmpty(d)) continue;
+                var fill = Attr(tag, "fill");
+                if (fill == "none") continue;
+                var rule = Attr(tag, "fill-rule");
+                GraphicsPath path;
+                try { path = ParsePathData(d, rule == "evenodd"); }
+                catch (Exception) { continue; }
+                var shape = new Shape();
+                shape.Path = path;
+                shape.UseTint = fill == null || IsTintable(fill);
+                if (!shape.UseTint) shape.Fill = ParseColor(fill);
+                glyph.Shapes.Add(shape);
+            }
+            return glyph.Shapes.Count > 0 ? glyph : null;
+        }
+
+        static bool IsTintable(string fill)
+        {
+            var f = fill.Trim().ToLowerInvariant();
+            return f == "white" || f == "#fff" || f == "#ffffff" || f == "currentcolor" || f.StartsWith("url(");
+        }
+
+        static Color ParseColor(string fill)
+        {
+            try
+            {
+                var f = fill.Trim();
+                if (f == "black") return Color.Black;
+                return ColorTranslator.FromHtml(f);
+            }
+            catch (Exception) { return Color.White; }
+        }
+
+        static string Attr(string tag, string name)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(tag, "(?<![\\w-])" + name + "=\"([^\"]*)\"");
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
+        static float ParseF(string s)
+        {
+            if (s == null) return 0;
+            float f;
+            return float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out f) ? f : 0;
+        }
+
+        // ---- path data -----------------------------------------------------
+
+        static GraphicsPath ParsePathData(string d, bool evenOdd)
+        {
+            var path = new GraphicsPath(evenOdd ? FillMode.Alternate : FillMode.Winding);
+            int i = 0;
+            char cmd = ' ';
+            char prev = ' ';
+            float cx = 0, cy = 0;    // current point
+            float sx = 0, sy = 0;    // subpath start
+            float pcx = 0, pcy = 0;  // previous control point (for S/T reflection)
+
+            while (true)
+            {
+                SkipSep(d, ref i);
+                if (i >= d.Length) break;
+                var c = d[i];
+                if (char.IsLetter(c)) { cmd = c; i++; }
+                else if (cmd == 'M') cmd = 'L';
+                else if (cmd == 'm') cmd = 'l';
+
+                bool rel = char.IsLower(cmd);
+                switch (char.ToUpperInvariant(cmd))
+                {
+                    case 'M':
+                    {
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { x += cx; y += cy; }
+                        path.StartFigure();
+                        cx = x; cy = y; sx = x; sy = y;
+                        break;
+                    }
+                    case 'L':
+                    {
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { x += cx; y += cy; }
+                        path.AddLine(cx, cy, x, y);
+                        cx = x; cy = y;
+                        break;
+                    }
+                    case 'H':
+                    {
+                        var x = Num(d, ref i);
+                        if (rel) x += cx;
+                        path.AddLine(cx, cy, x, cy);
+                        cx = x;
+                        break;
+                    }
+                    case 'V':
+                    {
+                        var y = Num(d, ref i);
+                        if (rel) y += cy;
+                        path.AddLine(cx, cy, cx, y);
+                        cy = y;
+                        break;
+                    }
+                    case 'C':
+                    {
+                        var x1 = Num(d, ref i); var y1 = Num(d, ref i);
+                        var x2 = Num(d, ref i); var y2 = Num(d, ref i);
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { x1 += cx; y1 += cy; x2 += cx; y2 += cy; x += cx; y += cy; }
+                        path.AddBezier(cx, cy, x1, y1, x2, y2, x, y);
+                        pcx = x2; pcy = y2; cx = x; cy = y;
+                        break;
+                    }
+                    case 'S':
+                    {
+                        var x2 = Num(d, ref i); var y2 = Num(d, ref i);
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { x2 += cx; y2 += cy; x += cx; y += cy; }
+                        var p = char.ToUpperInvariant(prev);
+                        float x1 = (p == 'C' || p == 'S') ? 2 * cx - pcx : cx;
+                        float y1 = (p == 'C' || p == 'S') ? 2 * cy - pcy : cy;
+                        path.AddBezier(cx, cy, x1, y1, x2, y2, x, y);
+                        pcx = x2; pcy = y2; cx = x; cy = y;
+                        break;
+                    }
+                    case 'Q':
+                    {
+                        var qx = Num(d, ref i); var qy = Num(d, ref i);
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { qx += cx; qy += cy; x += cx; y += cy; }
+                        QuadBezier(path, cx, cy, qx, qy, x, y);
+                        pcx = qx; pcy = qy; cx = x; cy = y;
+                        break;
+                    }
+                    case 'T':
+                    {
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { x += cx; y += cy; }
+                        var p = char.ToUpperInvariant(prev);
+                        float qx = (p == 'Q' || p == 'T') ? 2 * cx - pcx : cx;
+                        float qy = (p == 'Q' || p == 'T') ? 2 * cy - pcy : cy;
+                        QuadBezier(path, cx, cy, qx, qy, x, y);
+                        pcx = qx; pcy = qy; cx = x; cy = y;
+                        break;
+                    }
+                    case 'A':
+                    {
+                        var rx = Num(d, ref i); var ry = Num(d, ref i);
+                        var rot = Num(d, ref i);
+                        var laf = Flag(d, ref i); var sf = Flag(d, ref i);
+                        var x = Num(d, ref i); var y = Num(d, ref i);
+                        if (rel) { x += cx; y += cy; }
+                        ArcSegment(path, cx, cy, rx, ry, rot, laf != 0, sf != 0, x, y);
+                        cx = x; cy = y;
+                        break;
+                    }
+                    case 'Z':
+                    {
+                        path.CloseFigure();
+                        cx = sx; cy = sy;
+                        break;
+                    }
+                    default:
+                        return path;  // unknown command — render what we have
+                }
+                prev = cmd;
+            }
+            return path;
+        }
+
+        static void QuadBezier(GraphicsPath path, float x0, float y0, float qx, float qy, float x, float y)
+        {
+            // quadratic → cubic control points
+            float c1x = x0 + 2f / 3f * (qx - x0), c1y = y0 + 2f / 3f * (qy - y0);
+            float c2x = x + 2f / 3f * (qx - x), c2y = y + 2f / 3f * (qy - y);
+            path.AddBezier(x0, y0, c1x, c1y, c2x, c2y, x, y);
+        }
+
+        /// SVG elliptical arc → cubic bezier segments (W3C F.6.5).
+        static void ArcSegment(GraphicsPath path, float x0, float y0, float rx, float ry,
+                               float rotDeg, bool largeArc, bool sweep, float x, float y)
+        {
+            if (rx == 0 || ry == 0 || (x0 == x && y0 == y)) { path.AddLine(x0, y0, x, y); return; }
+            double phi = rotDeg * Math.PI / 180.0;
+            double cosP = Math.Cos(phi), sinP = Math.Sin(phi);
+            double rxd = Math.Abs(rx), ryd = Math.Abs(ry);
+
+            double dx2 = (x0 - x) / 2.0, dy2 = (y0 - y) / 2.0;
+            double x1p = cosP * dx2 + sinP * dy2;
+            double y1p = -sinP * dx2 + cosP * dy2;
+            double lam = (x1p * x1p) / (rxd * rxd) + (y1p * y1p) / (ryd * ryd);
+            if (lam > 1) { var s = Math.Sqrt(lam); rxd *= s; ryd *= s; }
+
+            double rx2 = rxd * rxd, ry2 = ryd * ryd;
+            double num = rx2 * ry2 - rx2 * y1p * y1p - ry2 * x1p * x1p;
+            double den = rx2 * y1p * y1p + ry2 * x1p * x1p;
+            double co = den == 0 ? 0 : Math.Sqrt(Math.Max(0, num / den));
+            if (largeArc == sweep) co = -co;
+            double cxp = co * rxd * y1p / ryd;
+            double cyp = -co * ryd * x1p / rxd;
+            double ccx = cosP * cxp - sinP * cyp + (x0 + x) / 2.0;
+            double ccy = sinP * cxp + cosP * cyp + (y0 + y) / 2.0;
+
+            double theta1 = VecAngle(1, 0, (x1p - cxp) / rxd, (y1p - cyp) / ryd);
+            double dTheta = VecAngle((x1p - cxp) / rxd, (y1p - cyp) / ryd,
+                                     (-x1p - cxp) / rxd, (-y1p - cyp) / ryd);
+            if (!sweep && dTheta > 0) dTheta -= 2 * Math.PI;
+            if (sweep && dTheta < 0) dTheta += 2 * Math.PI;
+
+            int segs = Math.Max(1, (int)Math.Ceiling(Math.Abs(dTheta) / (Math.PI / 2)));
+            double delta = dTheta / segs;
+            double t = 4.0 / 3.0 * Math.Tan(delta / 4.0);
+            double angle = theta1;
+            for (int k = 0; k < segs; k++)
+            {
+                double a2 = angle + delta;
+                double e1x = ccx + rxd * Math.Cos(angle) * cosP - ryd * Math.Sin(angle) * sinP;
+                double e1y = ccy + rxd * Math.Cos(angle) * sinP + ryd * Math.Sin(angle) * cosP;
+                double e2x = ccx + rxd * Math.Cos(a2) * cosP - ryd * Math.Sin(a2) * sinP;
+                double e2y = ccy + rxd * Math.Cos(a2) * sinP + ryd * Math.Sin(a2) * cosP;
+                double d1x = -rxd * Math.Sin(angle) * cosP - ryd * Math.Cos(angle) * sinP;
+                double d1y = -rxd * Math.Sin(angle) * sinP + ryd * Math.Cos(angle) * cosP;
+                double d2x = -rxd * Math.Sin(a2) * cosP - ryd * Math.Cos(a2) * sinP;
+                double d2y = -rxd * Math.Sin(a2) * sinP + ryd * Math.Cos(a2) * cosP;
+                path.AddBezier(
+                    (float)e1x, (float)e1y,
+                    (float)(e1x + t * d1x), (float)(e1y + t * d1y),
+                    (float)(e2x - t * d2x), (float)(e2y - t * d2y),
+                    (float)e2x, (float)e2y);
+                angle = a2;
+            }
+        }
+
+        static double VecAngle(double ux, double uy, double vx, double vy)
+        {
+            double dot = ux * vx + uy * vy;
+            double len = Math.Sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy));
+            if (len == 0) return 0;
+            double ang = Math.Acos(Math.Max(-1, Math.Min(1, dot / len)));
+            if (ux * vy - uy * vx < 0) ang = -ang;
+            return ang;
+        }
+
+        static void SkipSep(string d, ref int i)
+        {
+            while (i < d.Length && (d[i] == ' ' || d[i] == ',' || d[i] == '\n' || d[i] == '\r' || d[i] == '\t')) i++;
+        }
+
+        static float Num(string d, ref int i)
+        {
+            SkipSep(d, ref i);
+            int start = i;
+            if (i < d.Length && (d[i] == '+' || d[i] == '-')) i++;
+            bool dot = false;
+            while (i < d.Length)
+            {
+                var ch = d[i];
+                if (ch >= '0' && ch <= '9') { i++; continue; }
+                if (ch == '.' && !dot) { dot = true; i++; continue; }
+                if ((ch == 'e' || ch == 'E') && i > start)
+                {
+                    i++;
+                    if (i < d.Length && (d[i] == '+' || d[i] == '-')) i++;
+                    dot = true;  // no dot allowed after the exponent
+                    continue;
+                }
+                break;
+            }
+            float f;
+            float.TryParse(d.Substring(start, i - start), NumberStyles.Float, CultureInfo.InvariantCulture, out f);
+            return f;
+        }
+
+        static int Flag(string d, ref int i)
+        {
+            SkipSep(d, ref i);
+            if (i < d.Length && (d[i] == '0' || d[i] == '1')) { var v = d[i] - '0'; i++; return v; }
+            return (int)Num(d, ref i) != 0 ? 1 : 0;
+        }
+    }
+
+    // ======================================================== credential store
+
+    /// Read/write access to `~/.quotapanel/credentials.json` — the same store
+    /// the macOS app and the daemon use. Entries are kept as raw dictionaries
+    /// so fields this shell doesn't know survive a round-trip.
+    static class CredStore
+    {
+        public static string Home
+        {
+            get
+            {
+                var h = Environment.GetEnvironmentVariable("USERPROFILE");
+                if (string.IsNullOrEmpty(h)) h = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                return h;
+            }
+        }
+
+        static string FilePath { get { return Path.Combine(Home, ".quotapanel", "credentials.json"); } }
+
+        public static Dictionary<string, object> LoadAll()
+        {
+            try
+            {
+                if (!File.Exists(FilePath)) return new Dictionary<string, object>();
+                var ser = new JavaScriptSerializer();
+                var root = J.Dict(ser.DeserializeObject(File.ReadAllText(FilePath)));
+                return root != null ? root : new Dictionary<string, object>();
+            }
+            catch (Exception) { return new Dictionary<string, object>(); }
+        }
+
+        public static bool Has(string id) { return J.Dict(J.Get(LoadAll(), id)) != null; }
+
+        public static void Save(string id, Dictionary<string, object> entry)
+        {
+            var all = LoadAll();
+            all[id] = entry;
+            WriteAll(all);
+        }
+
+        public static void Delete(string id)
+        {
+            var all = LoadAll();
+            if (!all.Remove(id)) return;
+            if (all.Count == 0)
+            {
+                try { File.Delete(FilePath); } catch (Exception) { }
+            }
+            else WriteAll(all);
+        }
+
+        static void WriteAll(Dictionary<string, object> all)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                var ser = new JavaScriptSerializer();
+                File.WriteAllText(FilePath, ser.Serialize(all), new UTF8Encoding(false));
+            }
+            catch (Exception) { }
+        }
+    }
+
+    // ================================================================== oauth
+
+    /// OAuth client ids, read at runtime from %APPDATA%\quotapanel\
+    /// oauth-clients.json (same file the daemon uses) — never committed.
+    static class OAuthCfg
+    {
+        public static string ClientId(string key)
+        {
+            var env = Environment.GetEnvironmentVariable("QUOTAPANEL_" + key.ToUpperInvariant() + "_CLIENT_ID");
+            if (!string.IsNullOrEmpty(env)) return env;
+            try
+            {
+                var path = Path.Combine(Config.Dir, "oauth-clients.json");
+                if (!File.Exists(path)) return "";
+                var ser = new JavaScriptSerializer();
+                var root = J.Dict(ser.DeserializeObject(File.ReadAllText(path)));
+                var entry = J.Dict(J.Get(root, key));
+                var id = J.Str(entry, "clientId", "");
+                return id.StartsWith("PASTE_") ? "" : id;
+            }
+            catch (Exception) { return ""; }
+        }
+
+        public static string MissingHint(string provider)
+        {
+            return provider + " client id missing — copy oauth-clients.sample.json to\n" +
+                   Path.Combine(Config.Dir, "oauth-clients.json") + " and fill it in.";
+        }
+    }
+
+    static class Pkce
+    {
+        public static string Random(int bytes)
+        {
+            var buf = new byte[bytes];
+            using (var rng = new System.Security.Cryptography.RNGCryptoServiceProvider()) rng.GetBytes(buf);
+            return B64Url(buf);
+        }
+
+        public static string Challenge(string verifier)
+        {
+            using (var sha = new System.Security.Cryptography.SHA256Managed())
+                return B64Url(sha.ComputeHash(Encoding.ASCII.GetBytes(verifier)));
+        }
+
+        static string B64Url(byte[] data)
+        {
+            return Convert.ToBase64String(data).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+        }
+    }
+
+    /// Ports of the macOS app's sign-in flows (Services/OAuth.swift): Claude =
+    /// paste-a-code PKCE, Codex = localhost:1455 loopback callback. Tokens are
+    /// written to ~/.quotapanel/credentials.json; the daemon prefers them and
+    /// keeps them refreshed. Returns null on success, "" on user cancel, or an
+    /// error message.
+    static class OAuthFlows
+    {
+        public static string SignInClaude(IWin32Window owner)
+        {
+            var clientId = OAuthCfg.ClientId("claude");
+            if (clientId.Length == 0) return OAuthCfg.MissingHint("Claude");
+            var verifier = Pkce.Random(64);
+            var state = Pkce.Random(32);
+            const string redirect = "https://console.anthropic.com/oauth/code/callback";
+            var url = "https://claude.ai/oauth/authorize?code=true" +
+                "&client_id=" + Uri.EscapeDataString(clientId) +
+                "&response_type=code" +
+                "&redirect_uri=" + Uri.EscapeDataString(redirect) +
+                "&scope=" + Uri.EscapeDataString("org:create_api_key user:profile user:inference") +
+                "&code_challenge=" + Pkce.Challenge(verifier) +
+                "&code_challenge_method=S256" +
+                "&state=" + Uri.EscapeDataString(state);
+            try { Process.Start(url); }
+            catch (Exception) { return "Could not open the browser."; }
+
+            var input = PromptDialog.Show(owner, "Sign in to Claude",
+                "Approve access in the browser, then paste the code shown:");
+            if (input == null) return "";
+            var trimmed = input.Trim();
+            if (trimmed.Length == 0) return "Empty code — paste it exactly as shown.";
+            var pieces = trimmed.Split(new char[] { '#' }, 2);
+            var code = pieces[0];
+            var gotState = pieces.Length > 1 ? pieces[1] : state;
+            if (gotState != state) return "Security check (state) mismatch — restart the sign-in.";
+
+            string error;
+            var body = new Dictionary<string, string>();
+            body["grant_type"] = "authorization_code";
+            body["code"] = code;
+            body["state"] = gotState;
+            body["client_id"] = clientId;
+            body["redirect_uri"] = redirect;
+            body["code_verifier"] = verifier;
+            var json = PostJson("https://console.anthropic.com/v1/oauth/token", body, out error);
+            if (json == null) return error != null ? error : "Token exchange failed.";
+            var access = J.Str(json, "access_token", "");
+            if (access.Length == 0) return "Token exchange failed (no access token).";
+
+            var entry = new Dictionary<string, object>();
+            entry["accessToken"] = access;
+            var refresh = J.Str(json, "refresh_token", null);
+            if (refresh != null) entry["refreshToken"] = refresh;
+            var account = J.Dict(J.Get(json, "account"));
+            var uuid = J.Str(account, "uuid", null);
+            if (uuid != null) entry["accountId"] = uuid;
+            AddExpiry(entry, json);
+            var plan = J.Str(json, "subscription_type", null);
+            if (plan == null) plan = J.Str(account, "subscription_type", null);
+            if (plan != null) entry["plan"] = plan;
+            CredStore.Save("claude", entry);
+            return null;
+        }
+
+        public static string SignInCodex(IWin32Window owner)
+        {
+            var clientId = OAuthCfg.ClientId("codex");
+            if (clientId.Length == 0) return OAuthCfg.MissingHint("Codex");
+            var verifier = Pkce.Random(64);
+            var state = Pkce.Random(32);
+            const string redirect = "http://localhost:1455/auth/callback";
+
+            System.Net.Sockets.TcpListener listener;
+            try
+            {
+                listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 1455);
+                listener.Start();
+            }
+            catch (Exception)
+            {
+                return "Port 1455 is in use (another codex sign-in may be running) — close it and retry.";
+            }
+
+            var url = "https://auth.openai.com/oauth/authorize?response_type=code" +
+                "&client_id=" + Uri.EscapeDataString(clientId) +
+                "&redirect_uri=" + Uri.EscapeDataString(redirect) +
+                "&scope=" + Uri.EscapeDataString("openid profile email offline_access") +
+                "&code_challenge=" + Pkce.Challenge(verifier) +
+                "&code_challenge_method=S256" +
+                "&state=" + Uri.EscapeDataString(state) +
+                "&id_token_add_organizations=true";
+            try { Process.Start(url); }
+            catch (Exception) { listener.Stop(); return "Could not open the browser."; }
+
+            string code = null, cbError = null;
+            bool done = false;
+            var worker = new Thread(delegate()
+            {
+                try
+                {
+                    using (var client = listener.AcceptTcpClient())
+                    using (var stream = client.GetStream())
+                    {
+                        var buf = new byte[16384];
+                        int n = stream.Read(buf, 0, buf.Length);
+                        var request = Encoding.UTF8.GetString(buf, 0, Math.Max(0, n));
+                        var line = request.Split('\n')[0];
+                        var q = ParseQuery(line);
+                        string gotState, gotCode;
+                        q.TryGetValue("state", out gotState);
+                        q.TryGetValue("code", out gotCode);
+                        if (q.ContainsKey("error")) cbError = "Sign-in was denied.";
+                        else if (gotState != state) cbError = "Security check (state) mismatch — restart the sign-in.";
+                        else if (string.IsNullOrEmpty(gotCode)) cbError = "No code in the callback.";
+                        else code = gotCode;
+
+                        var html = cbError == null
+                            ? "<html><body style='font-family:sans-serif'><h3>Sign-in complete ✓</h3><p>You can close this window and return to QuotaPanel.</p></body></html>"
+                            : "<html><body style='font-family:sans-serif'><h3>Sign-in failed</h3><p>Return to QuotaPanel and try again.</p></body></html>";
+                        var payload = Encoding.UTF8.GetBytes(html);
+                        var header = Encoding.ASCII.GetBytes(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " +
+                            payload.Length + "\r\n\r\n");
+                        stream.Write(header, 0, header.Length);
+                        stream.Write(payload, 0, payload.Length);
+                        stream.Flush();
+                    }
+                }
+                catch (Exception) { /* listener stopped = cancelled */ }
+                finally
+                {
+                    try { listener.Stop(); } catch (Exception) { }
+                    done = true;
+                }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+
+            var finished = WaitDialog.Show(owner, "Sign in to Codex",
+                "Waiting for the browser sign-in…", delegate { return done; }, 300);
+            if (!finished)
+            {
+                try { listener.Stop(); } catch (Exception) { }
+                return "";
+            }
+            if (cbError != null) return cbError;
+            if (code == null) return "Sign-in timed out — try again.";
+
+            string error;
+            var body = new Dictionary<string, string>();
+            body["grant_type"] = "authorization_code";
+            body["code"] = code;
+            body["redirect_uri"] = redirect;
+            body["client_id"] = clientId;
+            body["code_verifier"] = verifier;
+            var json = PostJson("https://auth.openai.com/oauth/token", body, out error);
+            if (json == null) return error != null ? error : "Token exchange failed.";
+            var access = J.Str(json, "access_token", "");
+            if (access.Length == 0) return "Token exchange failed (no access token).";
+
+            var entry = new Dictionary<string, object>();
+            entry["accessToken"] = access;
+            var refresh = J.Str(json, "refresh_token", null);
+            if (refresh != null) entry["refreshToken"] = refresh;
+            var idToken = J.Str(json, "id_token", null);
+            if (idToken != null)
+            {
+                entry["idToken"] = idToken;
+                var auth = J.Dict(J.Get(JwtClaims(idToken), "https://api.openai.com/auth"));
+                var accountId = J.Str(auth, "chatgpt_account_id", null);
+                if (accountId != null) entry["accountId"] = accountId;
+                var plan = J.Str(auth, "chatgpt_plan_type", null);
+                if (plan != null) entry["plan"] = plan;
+            }
+            AddExpiry(entry, json);
+            CredStore.Save("codex", entry);
+            return null;
+        }
+
+        static void AddExpiry(Dictionary<string, object> entry, Dictionary<string, object> json)
+        {
+            var seconds = J.Num(json, "expires_in", 0);
+            if (seconds > 0)
+                entry["expiresAt"] = DateTime.UtcNow.AddSeconds(seconds)
+                    .ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        }
+
+        static Dictionary<string, string> ParseQuery(string requestLine)
+        {
+            var result = new Dictionary<string, string>();
+            var qIdx = requestLine.IndexOf('?');
+            if (qIdx < 0) return result;
+            var end = requestLine.IndexOf(' ', qIdx);
+            var query = end > qIdx ? requestLine.Substring(qIdx + 1, end - qIdx - 1) : requestLine.Substring(qIdx + 1);
+            foreach (var pair in query.Split('&'))
+            {
+                var eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                result[Uri.UnescapeDataString(pair.Substring(0, eq))] =
+                    Uri.UnescapeDataString(pair.Substring(eq + 1));
+            }
+            return result;
+        }
+
+        static Dictionary<string, object> JwtClaims(string token)
+        {
+            try
+            {
+                var parts = token.Split('.');
+                if (parts.Length < 2) return null;
+                var payload = parts[1].Replace('-', '+').Replace('_', '/');
+                while (payload.Length % 4 != 0) payload += "=";
+                var json = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+                return J.Dict(new JavaScriptSerializer().DeserializeObject(json));
+            }
+            catch (Exception) { return null; }
+        }
+
+        static Dictionary<string, object> PostJson(string url, Dictionary<string, string> body, out string error)
+        {
+            error = null;
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+                var ser = new JavaScriptSerializer();
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                req.Method = "POST";
+                req.ContentType = "application/json";
+                req.Timeout = 30000;
+                var payload = Encoding.UTF8.GetBytes(ser.Serialize(body));
+                using (var s = req.GetRequestStream()) s.Write(payload, 0, payload.Length);
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                using (var reader = new StreamReader(resp.GetResponseStream()))
+                    return J.Dict(ser.DeserializeObject(reader.ReadToEnd()));
+            }
+            catch (System.Net.WebException ex)
+            {
+                error = "Token exchange failed";
+                try
+                {
+                    if (ex.Response != null)
+                        using (var reader = new StreamReader(ex.Response.GetResponseStream()))
+                        {
+                            var text = reader.ReadToEnd();
+                            error += ": " + (text.Length > 200 ? text.Substring(0, 200) : text);
+                        }
+                    else error += ": " + ex.Message;
+                }
+                catch (Exception) { error += ": " + ex.Message; }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return null;
+            }
+        }
+    }
+
+    // ========================================================== oauth dialogs
+
+    static class DialogStyle
+    {
+        public static Form MakeForm(string title, int w, int h)
+        {
+            var f = new Form();
+            f.Text = title;
+            f.FormBorderStyle = FormBorderStyle.FixedDialog;
+            f.MaximizeBox = false;
+            f.MinimizeBox = false;
+            f.StartPosition = FormStartPosition.CenterScreen;
+            f.BackColor = Theme.Background;
+            f.ForeColor = Theme.Text;
+            f.Font = new Font("Segoe UI", 9f);
+            f.ClientSize = new Size(w, h);
+            f.TopMost = true;
+            return f;
+        }
+
+        public static Button MakeButton(string text, bool primary)
+        {
+            var b = new Button();
+            b.Text = text;
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderSize = primary ? 0 : 1;
+            b.FlatAppearance.BorderColor = Theme.Track;
+            b.BackColor = primary ? Theme.Accent : Theme.Card;
+            b.ForeColor = primary ? Color.FromArgb(30, 30, 35) : Theme.Text;
+            if (primary) b.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            b.Size = new Size(96, 30);
+            return b;
+        }
+    }
+
+    static class PromptDialog
+    {
+        /// Modal text prompt; null = cancelled.
+        public static string Show(IWin32Window owner, string title, string message)
+        {
+            using (var f = DialogStyle.MakeForm(title, 400, 150))
+            {
+                var label = new Label();
+                label.Text = message;
+                label.Location = new Point(14, 12);
+                label.Size = new Size(372, 34);
+                label.ForeColor = Theme.Text;
+                f.Controls.Add(label);
+
+                var box = new TextBox();
+                box.Location = new Point(14, 52);
+                box.Width = 372;
+                box.BackColor = Theme.Card;
+                box.ForeColor = Theme.Text;
+                box.BorderStyle = BorderStyle.FixedSingle;
+                f.Controls.Add(box);
+
+                var ok = DialogStyle.MakeButton("Sign in", true);
+                ok.Location = new Point(290, 106);
+                ok.DialogResult = DialogResult.OK;
+                f.Controls.Add(ok);
+
+                var cancel = DialogStyle.MakeButton("Cancel", false);
+                cancel.Location = new Point(186, 106);
+                cancel.DialogResult = DialogResult.Cancel;
+                f.Controls.Add(cancel);
+
+                f.AcceptButton = ok;
+                f.CancelButton = cancel;
+                return f.ShowDialog(owner) == DialogResult.OK ? box.Text : null;
+            }
+        }
+    }
+
+    static class WaitDialog
+    {
+        /// Modal wait: polls isDone every 200 ms, auto-closes when it returns
+        /// true or after timeoutSeconds. Returns false when the user cancelled.
+        public static bool Show(IWin32Window owner, string title, string message,
+                                Func<bool> isDone, int timeoutSeconds)
+        {
+            using (var f = DialogStyle.MakeForm(title, 360, 110))
+            {
+                var label = new Label();
+                label.Text = message;
+                label.Location = new Point(14, 16);
+                label.Size = new Size(332, 30);
+                label.ForeColor = Theme.Text;
+                f.Controls.Add(label);
+
+                var cancel = DialogStyle.MakeButton("Cancel", false);
+                cancel.Location = new Point(250, 66);
+                cancel.DialogResult = DialogResult.Cancel;
+                f.Controls.Add(cancel);
+                f.CancelButton = cancel;
+
+                var waited = 0;
+                var timer = new System.Windows.Forms.Timer();
+                timer.Interval = 200;
+                timer.Tick += delegate
+                {
+                    waited += 200;
+                    if (isDone() || waited >= timeoutSeconds * 1000)
+                    {
+                        timer.Stop();
+                        f.DialogResult = DialogResult.OK;
+                        f.Close();
+                    }
+                };
+                timer.Start();
+                var result = f.ShowDialog(owner);
+                timer.Stop();
+                timer.Dispose();
+                return result == DialogResult.OK;
+            }
+        }
+    }
+
+    // ============================================================= scroll host
+
+    /// Scroll container without the native (light) scrollbars: hosts one
+    /// content control, scrolls it by moving its Top, and shows a slim dark
+    /// thumb on the right.
+    class ScrollHost : Panel
+    {
+        Control content;
+        ScrollThumb thumb;
+
+        public ScrollHost()
+        {
+            BackColor = Theme.Background;
+            thumb = new ScrollThumb(this);
+            Controls.Add(thumb);
+        }
+
+        public Control Content { get { return content; } }
+        public int Offset { get { return content != null ? -content.Top : 0; } }
+        public int MaxOffset
+        {
+            get { return content == null ? 0 : Math.Max(0, content.Height - ClientSize.Height); }
+        }
+
+        public void SetContent(Control c)
+        {
+            if (content != null) Controls.Remove(content);
+            content = c;
+            c.Location = new Point(0, 0);
+            Controls.Add(c);
+            thumb.BringToFront();
+            Relayout();
+        }
+
+        public void ScrollBy(int delta) { ScrollTo(Offset + delta); }
+
+        public void ScrollTo(int offset)
+        {
+            if (content == null) return;
+            offset = Math.Max(0, Math.Min(MaxOffset, offset));
+            content.Top = -offset;
+            thumb.Reposition();
+        }
+
+        public void Relayout()
+        {
+            if (content == null) return;
+            content.Width = ClientSize.Width;
+            ScrollTo(Offset);
+            thumb.Reposition();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            Relayout();
+        }
+    }
+
+    class ScrollThumb : Control
+    {
+        readonly ScrollHost host;
+        bool dragging;
+        int dragStartY, dragStartOffset;
+
+        public ScrollThumb(ScrollHost host)
+        {
+            this.host = host;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
+                     ControlStyles.OptimizedDoubleBuffer, true);
+            BackColor = Theme.Background;
+            Cursor = Cursors.Hand;
+            Visible = false;
+        }
+
+        public void Reposition()
+        {
+            var viewH = host.ClientSize.Height;
+            var contentH = host.Content != null ? host.Content.Height : 0;
+            if (contentH <= viewH || viewH <= 0) { Visible = false; return; }
+            Visible = true;
+            int trackH = viewH - 8;
+            int h = Math.Max(28, (int)((double)viewH / contentH * trackH));
+            int y = 4 + (int)((double)host.Offset / (contentH - viewH) * (trackH - h));
+            SetBounds(host.ClientSize.Width - 9, y, 6, h);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var b = new SolidBrush(dragging ? Theme.SubText : Theme.Track))
+                Draw.FillRounded(e.Graphics, b, new Rectangle(0, 0, Width, Height), Width / 2);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            dragging = true;
+            dragStartY = Cursor.Position.Y;
+            dragStartOffset = host.Offset;
+            Invalidate();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!dragging) return;
+            var viewH = host.ClientSize.Height;
+            var contentH = host.Content != null ? host.Content.Height : 0;
+            int trackH = viewH - 8;
+            if (contentH <= viewH || trackH - Height <= 0) return;
+            var dy = Cursor.Position.Y - dragStartY;
+            host.ScrollTo(dragStartOffset + (int)((double)dy * (contentH - viewH) / (trackH - Height)));
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            dragging = false;
+            Invalidate();
+        }
+    }
+
+    // ================================================================== slider
+
+    /// Dark themed value slider (the native TrackBar can't be styled).
+    class Slider : DoubleBufferedControl
+    {
+        public int Minimum = 30;
+        public int Maximum = 1800;
+        public int Step = 30;
+        int value_ = 30;
+        bool dragging;
+        public event EventHandler ValueChanged;
+
+        public int Value
+        {
+            get { return value_; }
+            set
+            {
+                var snapped = Math.Max(Minimum, Math.Min(Maximum,
+                    Minimum + (int)Math.Round((value - Minimum) / (double)Step) * Step));
+                if (snapped == value_) return;
+                value_ = snapped;
+                Invalidate();
+                if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
+            }
+        }
+
+        int Pad { get { return Height / 2; } }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            int cy = Height / 2;
+            int x0 = Pad, x1 = Width - Pad;
+            using (var b = new SolidBrush(Theme.Track))
+                Draw.FillRounded(g, b, new Rectangle(x0, cy - 2, x1 - x0, 4), 2);
+            double t = (value_ - Minimum) / (double)(Maximum - Minimum);
+            int tx = x0 + (int)(t * (x1 - x0));
+            using (var b = new SolidBrush(Theme.Accent))
+                Draw.FillRounded(g, b, new Rectangle(x0, cy - 2, Math.Max(4, tx - x0), 4), 2);
+            var r = dragging ? 8 : 7;
+            using (var b = new SolidBrush(Theme.Text)) g.FillEllipse(b, tx - r, cy - r, r * 2, r * 2);
+            using (var p = new Pen(Theme.Background, 2)) g.DrawEllipse(p, tx - r, cy - r, r * 2, r * 2);
+        }
+
+        void SetFromX(int x)
+        {
+            double t = (x - Pad) / (double)Math.Max(1, Width - 2 * Pad);
+            t = Math.Max(0, Math.Min(1, t));
+            Value = Minimum + (int)Math.Round(t * (Maximum - Minimum));
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            dragging = true;
+            SetFromX(e.X);
+            Invalidate();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (dragging) SetFromX(e.X);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            dragging = false;
+            Invalidate();
+        }
+    }
+
     // =========================================================== tray context
 
     class TrayContext : ApplicationContext
@@ -620,7 +1769,7 @@ namespace QuotaPanel
         HashSet<string> firedAlerts = new HashSet<string>();
         Dictionary<string, double> lastPercents = new Dictionary<string, double>();
 
-        public TrayContext()
+        public TrayContext(string[] args)
         {
             config = Config.Load();
 
@@ -693,6 +1842,19 @@ namespace QuotaPanel
 
             LoadStatus();
             SpawnDaemon();
+
+            // Debug affordance: `QuotaPanelTray --panel [view]` opens the popup
+            // pinned (no auto-hide) so tooling can screenshot it; the tray icon
+            // is the normal path.
+            if (args != null && args.Length > 0 && args[0] == "--panel")
+            {
+                ShowPanel();
+                if (panel != null)
+                {
+                    panel.Pinned = true;
+                    if (args.Length > 1) panel.SelectView(args[1]);
+                }
+            }
         }
 
         // --- panel -----------------------------------------------------------
@@ -789,16 +1951,42 @@ namespace QuotaPanel
         public void SpawnDaemon()
         {
             var daemon = FindDaemon();
-            if (daemon == null) return;
+            if (daemon == null)
+            {
+                if (panel != null && !panel.IsDisposed) panel.RefreshDone();
+                return;
+            }
             try
             {
                 var psi = new ProcessStartInfo(daemon, "--once");
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
-                Process.Start(psi);
-                // The FileSystemWatcher picks up the rewritten status.json.
+                var proc = Process.Start(psi);
+                // The FileSystemWatcher picks up the rewritten status.json; the
+                // Exited fallback reloads in case a watcher event was missed and
+                // clears the panel's "refreshing…" indicator either way.
+                if (proc != null)
+                {
+                    proc.EnableRaisingEvents = true;
+                    proc.Exited += delegate
+                    {
+                        try
+                        {
+                            syncForm.BeginInvoke((MethodInvoker)delegate
+                            {
+                                LoadStatus();
+                                if (panel != null && !panel.IsDisposed) panel.RefreshDone();
+                                proc.Dispose();
+                            });
+                        }
+                        catch (Exception) { }
+                    };
+                }
             }
-            catch (Exception) { }
+            catch (Exception)
+            {
+                if (panel != null && !panel.IsDisposed) panel.RefreshDone();
+            }
         }
 
         public void ApplyConfig(Config c)
@@ -829,15 +2017,19 @@ namespace QuotaPanel
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(Color.Transparent);
-                // letter disc
-                using (var brush = new SolidBrush(brand))
-                    g.FillEllipse(brush, 1, 0, size - 2, size - 8);
-                using (var f = new Font("Segoe UI", 13, FontStyle.Bold, GraphicsUnit.Pixel))
+                // brand glyph (same SVGs as macOS/GNOME); letter disc fallback
+                var glyphRect = new RectangleF(3, 0, size - 6, size - 8);
+                if (p == null || !SvgIcon.Draw(g, p.Id, glyphRect, Theme.GlyphTint(brand)))
                 {
-                    var text = label.Length > 2 ? label.Substring(0, 2) : label;
-                    var sz = g.MeasureString(text, f);
-                    g.DrawString(text, f, Brushes.White,
-                        (size - sz.Width) / 2f, (size - 8 - sz.Height) / 2f + 1);
+                    using (var brush = new SolidBrush(Theme.GlyphTint(brand)))
+                        g.FillEllipse(brush, 1, 0, size - 2, size - 8);
+                    using (var f = new Font("Segoe UI", 13, FontStyle.Bold, GraphicsUnit.Pixel))
+                    {
+                        var text = label.Length > 2 ? label.Substring(0, 2) : label;
+                        var sz = g.MeasureString(text, f);
+                        g.DrawString(text, f, Brushes.White,
+                            (size - sz.Width) / 2f, (size - 8 - sz.Height) / 2f + 1);
+                    }
                 }
                 // usage bar
                 var barY = size - 5;
@@ -972,7 +2164,7 @@ namespace QuotaPanel
         StripControl strip;
         HeaderControl header;
         TabsControl tabs;
-        Panel contentHost;
+        ScrollHost contentHost;
         ContentCanvas canvas;
         SettingsPanel settings;
         System.Windows.Forms.Timer agoTimer;
@@ -1003,14 +2195,11 @@ namespace QuotaPanel
             tabs.Dock = DockStyle.Top;
             tabs.Height = S(34);
 
-            contentHost = new Panel();
+            contentHost = new ScrollHost();
             contentHost.Dock = DockStyle.Fill;
-            contentHost.AutoScroll = true;
-            contentHost.BackColor = Theme.Background;
 
             canvas = new ContentCanvas(this);
-            canvas.Width = ClientSize.Width - S(18);
-            contentHost.Controls.Add(canvas);
+            contentHost.SetContent(canvas);
 
             settings = new SettingsPanel(this);
             settings.Visible = false;
@@ -1050,6 +2239,7 @@ namespace QuotaPanel
         public void SetStatus(StatusFile s)
         {
             status = s;
+            refreshing = false;
             RefreshAll();
         }
 
@@ -1070,10 +2260,29 @@ namespace QuotaPanel
             settings.Visible = v == "settings";
             contentHost.Visible = v != "settings";
             if (v == "settings") settings.LoadFrom(config);
+            contentHost.ScrollTo(0);
             RefreshAll();
         }
 
-        public void RequestRefresh() { owner.SpawnDaemon(); }
+        bool refreshing;
+        public bool Refreshing { get { return refreshing; } }
+
+        /// Debug: opened via `--panel`, so don't hide on focus loss.
+        public bool Pinned;
+
+        public void RequestRefresh()
+        {
+            if (refreshing) return;
+            refreshing = true;
+            header.Invalidate();
+            owner.SpawnDaemon();
+        }
+
+        public void RefreshDone()
+        {
+            refreshing = false;
+            header.Invalidate();
+        }
 
         public void ApplySettings(Config c)
         {
@@ -1090,6 +2299,7 @@ namespace QuotaPanel
             if (view != "settings")
             {
                 canvas.Rebuild();
+                contentHost.Relayout();
                 canvas.Invalidate();
             }
         }
@@ -1107,6 +2317,7 @@ namespace QuotaPanel
         protected override void OnDeactivate(EventArgs e)
         {
             base.OnDeactivate(e);
+            if (Pinned) return;
             agoTimer.Stop();
             Hide();
         }
@@ -1121,20 +2332,35 @@ namespace QuotaPanel
                 strip.ScrollBy(-Math.Sign(e.Delta) * S(40));
                 return;
             }
-            if (view == "settings") return;
-            if (!contentHost.VerticalScroll.Visible) return;
-            int v = contentHost.VerticalScroll.Value - Math.Sign(e.Delta) * S(60);
-            v = Math.Max(contentHost.VerticalScroll.Minimum,
-                Math.Min(contentHost.VerticalScroll.Maximum, v));
-            contentHost.VerticalScroll.Value = v;
-            contentHost.PerformLayout();
+            if (view == "settings")
+            {
+                // The Save/Back bar is pinned, but the option list itself
+                // must scroll with the wheel too.
+                settings.ScrollBy(-Math.Sign(e.Delta) * S(60));
+                return;
+            }
+            contentHost.ScrollBy(-Math.Sign(e.Delta) * S(60));
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            // Rounded popup corners, Windows 11 style.
+            try
+            {
+                using (var path = Draw.Rounded(new Rectangle(0, 0, Width, Height), S(12)))
+                    Region = new Region(path);
+            }
+            catch (Exception) { }
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (var pen = new Pen(Theme.Track))
-                e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            using (var path = Draw.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), S(12)))
+                e.Graphics.DrawPath(pen, path);
         }
     }
 
@@ -1157,6 +2383,9 @@ namespace QuotaPanel
     {
         readonly PanelForm form;
         int scrollX;
+        int contentWidth;
+        string hoverId;
+        Rectangle leftChevron, rightChevron;
         List<KeyValuePair<Rectangle, string>> hits = new List<KeyValuePair<Rectangle, string>>();
 
         public StripControl(PanelForm form)
@@ -1171,77 +2400,131 @@ namespace QuotaPanel
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             hits.Clear();
+            leftChevron = Rectangle.Empty;
+            rightChevron = Rectangle.Empty;
 
             var status = form.Status;
             if (status == null || status.Providers == null)
             {
                 TextRenderer.DrawText(g, "Waiting for status.json…", Font,
-                    new Point(form.S(12), form.S(24)), Theme.SubText);
+                    new Point(form.S(14), form.S(24)), Theme.SubText);
                 return;
             }
 
-            int chip = form.S(44);
-            int gap = form.S(8);
-            int x = form.S(12) - scrollX;
-            int y = form.S(8);
+            int disc = form.S(34);
+            int cellW = disc + form.S(12);
+            int gap = form.S(4);
+            int y = form.S(9);
+            int x = form.S(14) - scrollX;
             var selected = form.Current;
 
             foreach (var p in status.Providers)
             {
                 if (!form.Cfg.IsEnabled(p.Id)) continue;
-                var rect = new Rectangle(x, y, chip, chip + form.S(6));
-                hits.Add(new KeyValuePair<Rectangle, string>(rect, p.Id));
+                var cell = new Rectangle(x, form.S(4), cellW, Height - form.S(8));
+                hits.Add(new KeyValuePair<Rectangle, string>(cell, p.Id));
 
                 var isSelected = selected != null && selected.Id == p.Id;
+                if (isSelected || hoverId == p.Id)
+                    using (var bg = new SolidBrush(isSelected ? Theme.Card : Theme.CardHover))
+                        Draw.FillRounded(g, bg, cell, form.S(10));
                 if (isSelected)
-                    using (var bg = new SolidBrush(Theme.Card))
-                        g.FillRectangle(bg, new Rectangle(x - form.S(3), y - form.S(3),
-                            chip + form.S(6), chip + form.S(12)));
+                    using (var pen = new Pen(Theme.Brand(p.BrandColor), form.S(2)))
+                    using (var outline = Draw.Rounded(cell, form.S(10)))
+                        g.DrawPath(pen, outline);
 
-                // letter disc
+                int dx = x + (cellW - disc) / 2;
                 var brand = Theme.Brand(p.BrandColor);
-                using (var brush = new SolidBrush(brand))
-                    g.FillEllipse(brush, x, y, chip - form.S(8), chip - form.S(8));
-                using (var f = new Font("Segoe UI", 12f, FontStyle.Bold))
+                // real brand glyph (same SVGs as macOS/GNOME), tinted with the
+                // brand color; letter disc only when no icon ships
+                var glyphRect = new RectangleF(dx + form.S(2), y + form.S(2), disc - form.S(4), disc - form.S(4));
+                if (!SvgIcon.Draw(g, p.Id, glyphRect, Theme.GlyphTint(brand)))
                 {
-                    var text = p.ShortLabel;
-                    var sz = g.MeasureString(text, f);
-                    g.DrawString(text, f, Brushes.White,
-                        x + (chip - form.S(8) - sz.Width) / 2f,
-                        y + (chip - form.S(8) - sz.Height) / 2f);
+                    using (var brush = new SolidBrush(Theme.GlyphTint(brand)))
+                        g.FillEllipse(brush, dx, y, disc, disc);
+                    using (var f = new Font("Segoe UI", 10f, FontStyle.Bold))
+                    {
+                        var text = p.ShortLabel;
+                        var sz = g.MeasureString(text, f);
+                        g.DrawString(text, f, Brushes.White,
+                            dx + (disc - sz.Width) / 2f, y + (disc - sz.Height) / 2f);
+                    }
                 }
-                // status dot for problems
+                // status dot for problems, with a background ring so it reads
+                // as a badge instead of a smudge
                 if (p.Status == "authProblem" || p.Status == "error")
+                {
+                    var badge = new Rectangle(dx + disc - form.S(10), y - form.S(1), form.S(10), form.S(10));
+                    using (var ring = new Pen(Theme.Background, form.S(3)))
+                        g.DrawEllipse(ring, badge);
                     using (var dot = new SolidBrush(p.Status == "authProblem" ? Theme.Orange : Theme.Red))
-                        g.FillEllipse(dot, x + chip - form.S(14), y, form.S(9), form.S(9));
+                        g.FillEllipse(dot, badge);
+                }
 
-                // 5h-session mini bar
-                var barY = y + chip - form.S(2);
-                using (var track = new SolidBrush(Theme.Track))
-                    g.FillRectangle(track, x, barY, chip - form.S(8), form.S(3));
+                // 5h-session mini bar under the disc
+                var barY = y + disc + form.S(5);
+                var track = new Rectangle(dx, barY, disc, form.S(4));
+                using (var tb = new SolidBrush(Theme.Track)) Draw.FillRounded(g, tb, track, form.S(2));
                 var window = p.TrayWindow;
                 if (window != null)
                 {
-                    var w = (int)Math.Round((chip - form.S(8)) * Math.Min(100, Math.Max(0, window.Percent)) / 100.0);
+                    var w = (int)Math.Round(disc * Math.Min(100, Math.Max(0, window.Percent)) / 100.0);
                     if (w > 0)
                         using (var fill = new SolidBrush(Theme.UsageColor(window.Percent)))
-                            g.FillRectangle(fill, x, barY, w, form.S(3));
+                            Draw.FillRounded(g, fill, new Rectangle(dx, barY, w, form.S(4)), form.S(2));
                 }
-                x += chip + gap;
+                x += cellW + gap;
             }
+            contentWidth = x + scrollX + form.S(10);
+
+            // edge chevrons when the strip overflows
+            int maxScroll = Math.Max(0, contentWidth - Width);
+            using (var f = new Font("Segoe UI", 11f, FontStyle.Bold))
+            {
+                if (scrollX > 0)
+                {
+                    leftChevron = new Rectangle(0, 0, form.S(18), Height);
+                    using (var bg = new SolidBrush(Theme.Background)) g.FillRectangle(bg, leftChevron);
+                    TextRenderer.DrawText(g, "‹", f, leftChevron, Theme.SubText,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+                if (scrollX < maxScroll)
+                {
+                    rightChevron = new Rectangle(Width - form.S(18), 0, form.S(18), Height);
+                    using (var bg = new SolidBrush(Theme.Background)) g.FillRectangle(bg, rightChevron);
+                    TextRenderer.DrawText(g, "›", f, rightChevron, Theme.SubText,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            string over = null;
+            foreach (var h in hits)
+                if (h.Key.Contains(e.Location)) { over = h.Value; break; }
+            if (over != hoverId) { hoverId = over; Invalidate(); }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (hoverId != null) { hoverId = null; Invalidate(); }
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (leftChevron.Width > 0 && leftChevron.Contains(e.Location)) { ScrollBy(-form.S(88)); return; }
+            if (rightChevron.Width > 0 && rightChevron.Contains(e.Location)) { ScrollBy(form.S(88)); return; }
             foreach (var h in hits)
                 if (h.Key.Contains(e.Location)) { form.SelectProvider(h.Value); return; }
         }
 
         public void ScrollBy(int delta)
         {
-            int total = hits.Count * form.S(52) + form.S(24);
-            int max = Math.Max(0, total - Width);
+            int max = Math.Max(0, contentWidth - Width);
             scrollX = Math.Max(0, Math.Min(max, scrollX + delta));
             Invalidate();
         }
@@ -1254,6 +2537,7 @@ namespace QuotaPanel
         readonly PanelForm form;
         Rectangle refreshRect;
         Rectangle gearRect;
+        int hover;   // 0 none, 1 refresh, 2 gear
 
         public HeaderControl(PanelForm form)
         {
@@ -1267,7 +2551,10 @@ namespace QuotaPanel
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var p = form.Current;
-            int x = form.S(12);
+            int x = form.S(14);
+
+            gearRect = new Rectangle(Width - form.S(42), Height / 2 - form.S(14), form.S(28), form.S(28));
+            refreshRect = new Rectangle(Width - form.S(74), Height / 2 - form.S(14), form.S(28), form.S(28));
 
             if (p != null)
             {
@@ -1285,35 +2572,71 @@ namespace QuotaPanel
                     TextRenderer.DrawText(g, p.Name, f, new Point(x, Height / 2 - form.S(10)), Theme.Text);
                     x += TextRenderer.MeasureText(p.Name, f).Width + form.S(6);
                 }
-                var sub = "";
-                if (!string.IsNullOrEmpty(p.Plan)) sub = p.Plan;
-                var ago = Theme.Ago(p.UpdatedAt);
-                if (ago.Length > 0) sub = sub.Length > 0 ? sub + " · " + ago : ago;
+                string sub;
+                if (form.Refreshing) sub = "refreshing…";
+                else
+                {
+                    sub = "";
+                    if (!string.IsNullOrEmpty(p.Plan)) sub = p.Plan;
+                    var ago = Theme.Ago(p.UpdatedAt);
+                    if (ago.Length > 0) sub = sub.Length > 0 ? sub + " · " + ago : ago;
+                }
                 if (sub.Length > 0)
-                    TextRenderer.DrawText(g, sub, Font, new Point(x, Height / 2 - form.S(8)), Theme.SubText);
+                    TextRenderer.DrawText(g, sub, Font, new Point(x, Height / 2 - form.S(8)),
+                        form.Refreshing ? Theme.Accent : Theme.SubText);
             }
             else
             {
-                TextRenderer.DrawText(g, "No data yet", Font, new Point(x, Height / 2 - form.S(8)), Theme.SubText);
+                TextRenderer.DrawText(g, form.Refreshing ? "Refreshing…" : "No data yet",
+                    Font, new Point(x, Height / 2 - form.S(8)), Theme.SubText);
             }
 
-            // right-side buttons: ⟳ and ⚙ (drawn as text for portability)
+            PaintButton(g, refreshRect, "↻", hover == 1,
+                form.Refreshing ? Theme.Accent : Theme.SubText);
+            PaintButton(g, gearRect, "⚙", hover == 2,
+                form.View == "settings" ? Theme.Accent : Theme.SubText);
+
+            using (var pen = new Pen(Theme.Card))
+                g.DrawLine(pen, form.S(12), Height - 1, Width - form.S(12), Height - 1);
+        }
+
+        void PaintButton(Graphics g, Rectangle rect, string glyph, bool hovered, Color color)
+        {
+            if (hovered)
+                using (var bg = new SolidBrush(Theme.CardHover))
+                    g.FillEllipse(bg, rect);
+            var final = hovered && color == Theme.SubText ? Theme.Text : color;
             using (var f = new Font("Segoe UI", 12f))
+                TextRenderer.DrawText(g, glyph, f, rect, final,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int h = 0;
+            if (refreshRect.Contains(e.Location)) h = 1;
+            else if (gearRect.Contains(e.Location)) h = 2;
+            if (h != hover)
             {
-                gearRect = new Rectangle(Width - form.S(34), Height / 2 - form.S(12), form.S(24), form.S(24));
-                refreshRect = new Rectangle(Width - form.S(62), Height / 2 - form.S(12), form.S(24), form.S(24));
-                TextRenderer.DrawText(g, "↻", f, refreshRect, Theme.SubText,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                TextRenderer.DrawText(g, "⚙", f, gearRect, Theme.SubText,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                hover = h;
+                Cursor = h != 0 ? Cursors.Hand : Cursors.Default;
+                Invalidate();
             }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (hover != 0) { hover = 0; Cursor = Cursors.Default; Invalidate(); }
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
             if (refreshRect.Contains(e.Location)) form.RequestRefresh();
-            else if (gearRect.Contains(e.Location)) form.SelectView("settings");
+            else if (gearRect.Contains(e.Location))
+                form.SelectView(form.View == "settings" ? "live" : "settings");
         }
     }
 
@@ -1322,6 +2645,7 @@ namespace QuotaPanel
     class TabsControl : DoubleBufferedControl
     {
         readonly PanelForm form;
+        string hoverName;
         List<KeyValuePair<Rectangle, string>> hits = new List<KeyValuePair<Rectangle, string>>();
 
         public TabsControl(PanelForm form)
@@ -1334,34 +2658,62 @@ namespace QuotaPanel
         {
             base.OnPaint(e);
             var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             hits.Clear();
             var p = form.Current;
             if (p == null || !p.HasExtras)
             {
-                Height = form.S(4);
+                Height = form.S(6);
                 return;
             }
-            Height = form.S(34);
+            Height = form.S(44);
 
+            // segmented pill control
             string[] names = { "live", "summary", "heatmap" };
             string[] labels = { "Live", "Summary", "Heatmap" };
-            int x = form.S(12);
+            var container = new Rectangle(form.S(12), form.S(7), Width - form.S(24), form.S(30));
+            using (var bg = new SolidBrush(Theme.Card))
+                Draw.FillRounded(g, bg, container, form.S(15));
+
+            int segW = container.Width / names.Length;
             for (int i = 0; i < names.Length; i++)
             {
-                using (var f = new Font("Segoe UI", 9f, form.View == names[i] ? FontStyle.Bold : FontStyle.Regular))
-                {
-                    var w = TextRenderer.MeasureText(labels[i], f).Width + form.S(18);
-                    var rect = new Rectangle(x, form.S(3), w, form.S(26));
-                    hits.Add(new KeyValuePair<Rectangle, string>(rect, names[i]));
-                    if (form.View == names[i])
-                        using (var bg = new SolidBrush(Theme.Card))
-                            g.FillRectangle(bg, rect);
+                var rect = new Rectangle(container.X + i * segW, container.Y, segW, container.Height);
+                if (i == names.Length - 1) rect.Width = container.Right - rect.X;
+                hits.Add(new KeyValuePair<Rectangle, string>(rect, names[i]));
+                bool isActive = form.View == names[i];
+                var seg = Rectangle.Inflate(rect, -form.S(3), -form.S(3));
+                if (isActive)
+                    using (var fill = new SolidBrush(Theme.Track))
+                        Draw.FillRounded(g, fill, seg, form.S(12));
+                else if (hoverName == names[i])
+                    using (var fill = new SolidBrush(Color.FromArgb(70, Theme.Track)))
+                        Draw.FillRounded(g, fill, seg, form.S(12));
+                using (var f = new Font("Segoe UI", 9f, isActive ? FontStyle.Bold : FontStyle.Regular))
                     TextRenderer.DrawText(g, labels[i], f, rect,
-                        form.View == names[i] ? Theme.Text : Theme.SubText,
+                        isActive ? Theme.Text : Theme.SubText,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                    x += w + form.S(6);
-                }
             }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            string over = null;
+            foreach (var h in hits)
+                if (h.Key.Contains(e.Location)) { over = h.Value; break; }
+            if (over != hoverName)
+            {
+                hoverName = over;
+                Cursor = over != null ? Cursors.Hand : Cursors.Default;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (hoverName != null) { hoverName = null; Cursor = Cursors.Default; Invalidate(); }
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
@@ -1390,10 +2742,10 @@ namespace QuotaPanel
 
         public void Rebuild()
         {
+            // Width is owned by the hosting ScrollHost; only measure height.
             using (var g = CreateGraphics())
                 contentHeight = Paint_(g, true);
             Height = Math.Max(contentHeight, form.S(80));
-            Width = Parent != null ? Parent.ClientSize.Width - form.S(4) : Width;
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -1422,16 +2774,21 @@ namespace QuotaPanel
             if (p.Status == "authProblem" || p.Status == "error")
             {
                 var msg = p.Message != null ? p.Message : p.Status;
-                var rect = new Rectangle(x, y, w, form.S(40));
+                var accent = p.Status == "authProblem" ? Theme.Orange : Theme.Red;
+                var needed = TextRenderer.MeasureText(msg, Font,
+                    new Size(w - form.S(26), 1000), TextFormatFlags.WordBreak).Height;
+                var bannerH = Math.Max(form.S(38), needed + form.S(18));
                 if (!measureOnly)
                 {
-                    using (var bg = new SolidBrush(Theme.Card)) g.FillRectangle(bg, rect);
-                    TextRenderer.DrawText(g, msg, Font, Rectangle.Inflate(rect, -form.S(8), 0),
-                        p.Status == "authProblem" ? Theme.Orange : Theme.Red,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.WordBreak);
+                    var rect = new Rectangle(x, y, w, bannerH);
+                    using (var bg = new SolidBrush(Theme.Card)) Draw.FillRounded(g, bg, rect, form.S(8));
+                    using (var stripe = new SolidBrush(accent))
+                        Draw.FillRounded(g, stripe, new Rectangle(x, y, form.S(4), bannerH), form.S(2));
+                    TextRenderer.DrawText(g, msg, Font,
+                        new Rectangle(x + form.S(16), y + form.S(9), w - form.S(26), bannerH - form.S(18)),
+                        accent, TextFormatFlags.Left | TextFormatFlags.WordBreak);
                 }
-                y += form.S(48);
+                y += bannerH + form.S(10);
             }
 
             if (form.View == "summary" && p.Summary != null) return PaintSummary(g, p, x, y, w, measureOnly);
@@ -1449,7 +2806,8 @@ namespace QuotaPanel
                 {
                     y = PaintBarRow(g, x, y, w, win.Label, Theme.Percent(win.Percent),
                         Theme.Reset(win.ResetsAt), win.Percent,
-                        IsSessionWindow(win, p) ? p.SessionParts : null, measureOnly);
+                        IsSessionWindow(win, p) ? p.SessionParts : null,
+                        Theme.UsageColor(win.Percent), measureOnly);
                 }
             }
             else if (p.Status == "ok")
@@ -1469,7 +2827,7 @@ namespace QuotaPanel
                     if (c.Detail.Length > 0) label += " — " + c.Detail;
                     var detail = Theme.Tokens(c.Used) + " / " + Theme.Tokens(c.Limit);
                     y = PaintBarRow(g, x, y, w, label, Theme.Percent(c.Percent), detail,
-                        c.Percent, c.PartsValue, measureOnly);
+                        c.Percent, c.PartsValue, Theme.ContextColor(c.Percent), measureOnly);
                 }
             }
 
@@ -1498,9 +2856,12 @@ namespace QuotaPanel
         }
 
         /// A labelled usage bar; when parts is non-null the fill is split into
-        /// input/cache/output segments (scaled to the used fraction).
+        /// input/cache/output segments (scaled to the used fraction) and an
+        /// "input x% · cache y% · output z%" legend line is added, like the
+        /// GNOME extension's partsCaption. `accent` colors the percent text
+        /// and the solid fill.
         int PaintBarRow(Graphics g, int x, int y, int w, string label, string percentText,
-                        string rightText, double percent, Parts parts, bool measureOnly)
+                        string rightText, double percent, Parts parts, Color accent, bool measureOnly)
         {
             if (!measureOnly)
             {
@@ -1509,7 +2870,7 @@ namespace QuotaPanel
                 using (var f = new Font("Segoe UI", 9f, FontStyle.Bold))
                 {
                     var pw = TextRenderer.MeasureText(percentText, f).Width;
-                    TextRenderer.DrawText(g, percentText, f, new Point(x + w - pw, y), Theme.Text);
+                    TextRenderer.DrawText(g, percentText, f, new Point(x + w - pw, y), accent);
                     if (rightText != null)
                     {
                         var rw = TextRenderer.MeasureText(rightText, Font).Width;
@@ -1520,10 +2881,23 @@ namespace QuotaPanel
             }
             y += form.S(20);
 
+            if (parts != null && parts.Total > 0)
+            {
+                // per-part share of the bar's percent, e.g. "cache 19.4%"
+                if (!measureOnly)
+                {
+                    int lx = x;
+                    lx = PaintPartLegend(g, lx, y, Theme.PartInput, "input", parts.Input, parts.Total, percent);
+                    lx = PaintPartLegend(g, lx, y, Theme.PartCache, "cache", parts.Cache, parts.Total, percent);
+                    PaintPartLegend(g, lx, y, Theme.PartOutput, "output", parts.Output, parts.Total, percent);
+                }
+                y += form.S(17);
+            }
+
             var barRect = new Rectangle(x, y, w, form.S(8));
             if (!measureOnly)
             {
-                using (var track = new SolidBrush(Theme.Track)) FillRounded(g, track, barRect, form.S(4));
+                using (var track = new SolidBrush(Theme.Track)) Draw.FillRounded(g, track, barRect, form.S(4));
                 var used = Math.Min(100, Math.Max(0, percent)) / 100.0;
                 var usedW = (int)Math.Round(w * used);
                 if (usedW > 0)
@@ -1531,55 +2905,118 @@ namespace QuotaPanel
                     if (parts != null && parts.Total > 0)
                     {
                         // input / cache / output segments within the used width
-                        long total = parts.Total;
-                        int xi = barRect.X;
-                        int wi = (int)Math.Round(usedW * (double)parts.Input / total);
-                        int wc = (int)Math.Round(usedW * (double)parts.Cache / total);
-                        int wo = usedW - wi - wc;
-                        if (wi > 0) using (var b = new SolidBrush(Theme.PartInput)) g.FillRectangle(b, xi, barRect.Y, wi, barRect.Height);
-                        xi += wi;
-                        if (wc > 0) using (var b = new SolidBrush(Theme.PartCache)) g.FillRectangle(b, xi, barRect.Y, wc, barRect.Height);
-                        xi += wc;
-                        if (wo > 0) using (var b = new SolidBrush(Theme.PartOutput)) g.FillRectangle(b, xi, barRect.Y, wo, barRect.Height);
+                        Draw.FillSegments(g,
+                            new Rectangle(barRect.X, barRect.Y, usedW, barRect.Height),
+                            form.S(4), parts);
                     }
                     else
                     {
-                        using (var fill = new SolidBrush(Theme.UsageColor(percent)))
-                            FillRounded(g, fill, new Rectangle(barRect.X, barRect.Y, usedW, barRect.Height), form.S(4));
+                        using (var fill = new SolidBrush(accent))
+                            Draw.FillRounded(g, fill, new Rectangle(barRect.X, barRect.Y, usedW, barRect.Height), form.S(4));
                     }
                 }
             }
             return y + form.S(18);
         }
 
+        /// One "· input 2.1%" legend entry (colored dot + share of `percent`).
+        int PaintPartLegend(Graphics g, int x, int y, Color color, string name,
+                            long value, long total, double percent)
+        {
+            var share = total > 0 ? (double)value / total * percent : 0;
+            using (var f = new Font("Segoe UI", 8f))
+            {
+                var box = new Rectangle(x, y + form.S(4), form.S(8), form.S(8));
+                using (var b = new SolidBrush(color)) Draw.FillRounded(g, b, box, form.S(2));
+                var tx = x + form.S(11);
+                var text = name + " " + Theme.Percent(share);
+                TextRenderer.DrawText(g, text, f, new Point(tx, y + form.S(1)), Theme.SubText);
+                return tx + TextRenderer.MeasureText(text, f).Width + form.S(10);
+            }
+        }
+
         int PaintChart(Graphics g, ProviderStatus p, int x, int y, int w, bool isCost, bool measureOnly)
         {
-            var days = p.Daily.Count > 14 ? p.Daily.Skip(p.Daily.Count - 14).ToList() : p.Daily;
-            int chartH = form.S(70);
-            if (!measureOnly && days.Count > 0)
+            // Fixed 14-day window ending today so sparse history renders as a
+            // proper timeline instead of one or two panel-wide slabs.
+            const int slots = 14;
+            var byDay = new Dictionary<string, double>();
+            foreach (var d in p.Daily)
             {
-                double max = 0;
-                foreach (var d in days) max = Math.Max(max, isCost ? d.CostUSD : d.Tokens);
-                if (max <= 0) max = 1;
-                int gap = form.S(3);
-                int bw = Math.Max(form.S(4), (w - gap * (days.Count - 1)) / days.Count);
-                int xi = x;
-                var today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                foreach (var d in days)
+                var val = isCost ? d.CostUSD : d.Tokens;
+                double cur;
+                byDay[d.Day] = (byDay.TryGetValue(d.Day, out cur) ? cur : 0) + val;
+            }
+            var vals = new double[slots];
+            for (int i = 0; i < slots; i++)
+            {
+                var key = DateTime.Now.Date.AddDays(i - (slots - 1))
+                    .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                double v;
+                vals[i] = byDay.TryGetValue(key, out v) ? v : 0;
+            }
+            double max = 0;
+            foreach (var v in vals) max = Math.Max(max, v);
+
+            int chartH = form.S(84);
+            int gap = form.S(5);
+            int bw = (w - gap * (slots - 1)) / slots;
+            if (bw > form.S(20)) bw = form.S(20);
+            if (bw < form.S(4)) bw = form.S(4);
+            int totalW = bw * slots + gap * (slots - 1);
+            int x0 = x + (w - totalW) / 2;
+
+            if (!measureOnly)
+            {
+                // dotted max reference line + label
+                if (max > 0)
                 {
-                    var v = isCost ? d.CostUSD : d.Tokens;
-                    int bh = (int)Math.Round(chartH * v / max);
-                    var color = d.Day == today ? Theme.Accent : Theme.Brand(p.BrandColor);
+                    var label = isCost
+                        ? "$" + max.ToString(max >= 10 ? "0" : "0.00", CultureInfo.InvariantCulture)
+                        : Theme.Tokens((long)max);
+                    using (var f = new Font("Segoe UI", 7f))
+                    {
+                        var lw = TextRenderer.MeasureText(label, f).Width;
+                        TextRenderer.DrawText(g, label, f,
+                            new Point(x + w - lw, y - form.S(3)), Theme.SubText);
+                        using (var pen = new Pen(Theme.Track))
+                        {
+                            pen.DashStyle = DashStyle.Dot;
+                            g.DrawLine(pen, x0, y + form.S(3), x + w - lw - form.S(6), y + form.S(3));
+                        }
+                    }
+                }
+                var barColor = Color.FromArgb(215, Theme.Brand(p.BrandColor));
+                int xi = x0;
+                for (int i = 0; i < slots; i++)
+                {
+                    int bh = max > 0 ? (int)Math.Round((chartH - form.S(6)) * vals[i] / max) : 0;
+                    if (vals[i] > 0 && bh < form.S(3)) bh = form.S(3);
                     if (bh > 0)
-                        using (var b = new SolidBrush(color))
-                            g.FillRectangle(b, xi, y + chartH - bh, bw, bh);
+                    {
+                        var rect = new Rectangle(xi, y + chartH - bh, bw, bh);
+                        using (var b = new SolidBrush(i == slots - 1 ? Theme.Accent : barColor))
+                            Draw.FillRounded(g, b, rect, form.S(3));
+                    }
                     else
+                    {
                         using (var b = new SolidBrush(Theme.Track))
                             g.FillRectangle(b, xi, y + chartH - form.S(2), bw, form.S(2));
+                    }
                     xi += bw + gap;
                 }
+                // x-axis range labels
+                using (var f = new Font("Segoe UI", 7f))
+                {
+                    var from = DateTime.Now.Date.AddDays(-(slots - 1))
+                        .ToString("MMM d", CultureInfo.InvariantCulture);
+                    TextRenderer.DrawText(g, from, f, new Point(x0, y + chartH + form.S(4)), Theme.SubText);
+                    var tw = TextRenderer.MeasureText("today", f).Width;
+                    TextRenderer.DrawText(g, "today", f,
+                        new Point(x0 + totalW - tw, y + chartH + form.S(4)), Theme.SubText);
+                }
             }
-            y += chartH + form.S(6);
+            y += chartH + form.S(20);
 
             if (!measureOnly)
             {
@@ -1611,47 +3048,41 @@ namespace QuotaPanel
             foreach (var b in p.Summary)
             {
                 var parts = b.PartsValue != null ? b.PartsValue : new Parts();
+                int cardH = form.S(88);
                 if (!measureOnly)
                 {
-                    TextRenderer.DrawText(g, b.Label, Font, new Point(x, y), Theme.Text);
-                    using (var f = new Font("Segoe UI", 9f, FontStyle.Bold))
+                    var card = new Rectangle(x, y, w, cardH);
+                    using (var bg = new SolidBrush(Theme.Card)) Draw.FillRounded(g, bg, card, form.S(10));
+
+                    int ix = x + form.S(14);
+                    int iw = w - form.S(28);
+                    int iy = y + form.S(12);
+
+                    TextRenderer.DrawText(g, b.Label, Font, new Point(ix, iy), Theme.Text);
+                    using (var f = new Font("Segoe UI", 9.5f, FontStyle.Bold))
                     {
-                        var t = Theme.Tokens(parts.Total);
+                        var t = Theme.Tokens(parts.Total) + " tokens";
                         var tw = TextRenderer.MeasureText(t, f).Width;
-                        TextRenderer.DrawText(g, t, f, new Point(x + w - tw, y), Theme.Text);
+                        TextRenderer.DrawText(g, t, f, new Point(ix + iw - tw, iy), Theme.Text);
                     }
-                }
-                y += form.S(20);
+                    iy += form.S(24);
 
-                if (!measureOnly)
-                {
-                    var barRect = new Rectangle(x, y, w, form.S(10));
-                    using (var track = new SolidBrush(Theme.Track)) FillRounded(g, track, barRect, form.S(5));
+                    // composition shares in percent, like the GNOME partsCaption
+                    int lx = ix;
+                    lx = PaintPartLegend(g, lx, iy, Theme.PartInput, "input", parts.Input, parts.Total, 100);
+                    lx = PaintPartLegend(g, lx, iy, Theme.PartCache, "cache", parts.Cache, parts.Total, 100);
+                    PaintPartLegend(g, lx, iy, Theme.PartOutput, "output", parts.Output, parts.Total, 100);
+                    iy += form.S(20);
+
+                    // full-width composition bar (GNOME summary parity)
+                    var track = new Rectangle(ix, iy, iw, form.S(8));
+                    using (var tb = new SolidBrush(Theme.Track)) Draw.FillRounded(g, tb, track, form.S(4));
                     if (parts.Total > 0)
-                    {
-                        int xi = x;
-                        int wi = (int)Math.Round(w * (double)parts.Input / parts.Total);
-                        int wc = (int)Math.Round(w * (double)parts.Cache / parts.Total);
-                        int wo = w - wi - wc;
-                        if (wi > 0) using (var br = new SolidBrush(Theme.PartInput)) g.FillRectangle(br, xi, y, wi, form.S(10));
-                        xi += wi;
-                        if (wc > 0) using (var br = new SolidBrush(Theme.PartCache)) g.FillRectangle(br, xi, y, wc, form.S(10));
-                        xi += wc;
-                        if (wo > 0) using (var br = new SolidBrush(Theme.PartOutput)) g.FillRectangle(br, xi, y, wo, form.S(10));
-                    }
+                        Draw.FillSegments(g, track, form.S(4), parts);
                 }
-                y += form.S(16);
-
-                if (!measureOnly)
-                {
-                    var legend = "in " + Theme.Tokens(parts.Input) +
-                                 " · cache " + Theme.Tokens(parts.Cache) +
-                                 " · out " + Theme.Tokens(parts.Output);
-                    TextRenderer.DrawText(g, legend, Font, new Point(x, y), Theme.SubText);
-                }
-                y += form.S(26);
+                y += cardH + form.S(10);
             }
-            return y + form.S(8);
+            return y + form.S(6);
         }
 
         // ---- heatmap ------------------------------------------------------------
@@ -1660,46 +3091,94 @@ namespace QuotaPanel
         {
             var h = p.HeatmapValue;
             if (!measureOnly)
-                TextRenderer.DrawText(g, Theme.Tokens(h.TotalTokens) + " tokens in the last 12 weeks",
-                    Font, new Point(x, y), Theme.SubText);
-            y += form.S(24);
+            {
+                using (var f = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+                    TextRenderer.DrawText(g, Theme.Tokens(h.TotalTokens) + " tokens", f,
+                        new Point(x, y), Theme.Text);
+                var sub = "last 12 weeks";
+                var sw = TextRenderer.MeasureText(sub, Font).Width;
+                TextRenderer.DrawText(g, sub, Font, new Point(x + w - sw, y + form.S(1)), Theme.SubText);
+            }
+            y += form.S(28);
+
+            int labelW = form.S(30);
 
             // daily grid: columns = weeks, rows = Mon...Sun
             int cols = h.DailyGrid != null ? h.DailyGrid.Count : 0;
             if (cols > 0)
             {
-                int gap = form.S(2);
-                int cell = Math.Max(form.S(6), Math.Min(form.S(14), (w - form.S(28) - gap * (cols - 1)) / cols));
-                string[] dayLabels = { "Mon", "", "Wed", "", "Fri", "", "" };
+                int gap = form.S(3);
+                int cell = (w - labelW - gap * (cols - 1)) / cols;
+                if (cell > form.S(16)) cell = form.S(16);
+                if (cell < form.S(6)) cell = form.S(6);
+                string[] dayLabels = { "Mon", "", "Wed", "", "Fri", "", "Sun" };
                 if (!measureOnly)
                 {
                     using (var f = new Font("Segoe UI", 7f))
                         for (int r = 0; r < 7; r++)
                             if (dayLabels[r].Length > 0)
                                 TextRenderer.DrawText(g, dayLabels[r], f,
-                                    new Point(x, y + r * (cell + gap)), Theme.SubText);
+                                    new Point(x, y + r * (cell + gap) + Math.Max(0, (cell - form.S(11)) / 2)),
+                                    Theme.SubText);
                     for (int c = 0; c < cols; c++)
                     {
                         var column = h.DailyGrid[c];
                         for (int r = 0; r < 7 && r < column.Count; r++)
                         {
                             var cellV = column[r];
-                            var rect = new Rectangle(x + form.S(28) + c * (cell + gap), y + r * (cell + gap), cell, cell);
                             if (cellV == null) continue;  // future day
+                            var rect = new Rectangle(x + labelW + c * (cell + gap), y + r * (cell + gap), cell, cell);
                             var lvl = Math.Max(0, Math.Min(4, cellV.Level));
-                            using (var b = new SolidBrush(Theme.Heat[lvl])) g.FillRectangle(b, rect);
+                            using (var b = new SolidBrush(Theme.Heat[lvl]))
+                                Draw.FillRounded(g, b, rect, form.S(3));
                         }
                     }
                 }
-                y += 7 * (cell + gap) + form.S(14);
+                y += 7 * (cell + gap) + form.S(6);
+
+                // Less … More legend, GitHub style
+                if (!measureOnly)
+                {
+                    using (var f = new Font("Segoe UI", 7f))
+                    {
+                        int box = form.S(10);
+                        int lgap = form.S(3);
+                        var lessW = TextRenderer.MeasureText("Less", f).Width;
+                        var moreW = TextRenderer.MeasureText("More", f).Width;
+                        int lx = x + w - moreW - 5 * box - 4 * lgap - lessW - form.S(12);
+                        TextRenderer.DrawText(g, "Less", f, new Point(lx, y + form.S(1)), Theme.SubText);
+                        lx += lessW + form.S(4);
+                        for (int i = 0; i < 5; i++)
+                        {
+                            using (var b = new SolidBrush(Theme.Heat[i]))
+                                Draw.FillRounded(g, b, new Rectangle(lx, y + form.S(2), box, box), form.S(2));
+                            lx += box + lgap;
+                        }
+                        TextRenderer.DrawText(g, "More", f, new Point(lx + form.S(2), y + form.S(1)), Theme.SubText);
+                    }
+                }
+                y += form.S(26);
             }
 
             // hour-of-day punch card
             if (h.HourRows != null && h.HourRows.Count > 0)
             {
                 y = PaintSectionTitle(g, x, y, "BY HOUR — LAST 7 DAYS", measureOnly);
-                int gap = form.S(2);
-                int cell = Math.Max(form.S(6), Math.Min(form.S(12), (w - form.S(28) - gap * 23) / 24));
+                int gap = form.S(3);
+                int cell = (w - labelW - gap * 23) / 24;
+                if (cell > form.S(12)) cell = form.S(12);
+                if (cell < form.S(5)) cell = form.S(5);
+                if (!measureOnly)
+                {
+                    using (var f = new Font("Segoe UI", 7f))
+                    {
+                        int[] ticks = { 0, 6, 12, 18 };
+                        foreach (var t in ticks)
+                            TextRenderer.DrawText(g, t.ToString(CultureInfo.InvariantCulture), f,
+                                new Point(x + labelW + t * (cell + gap), y), Theme.SubText);
+                    }
+                }
+                y += form.S(14);
                 if (!measureOnly)
                 {
                     using (var f = new Font("Segoe UI", 7f))
@@ -1707,14 +3186,17 @@ namespace QuotaPanel
                         int r = 0;
                         foreach (var row in h.HourRows)
                         {
-                            TextRenderer.DrawText(g, row.Day, f, new Point(x, y + r * (cell + gap)), Theme.SubText);
+                            TextRenderer.DrawText(g, row.Day, f,
+                                new Point(x, y + r * (cell + gap) + Math.Max(0, (cell - form.S(11)) / 2)),
+                                Theme.SubText);
                             for (int c = 0; c < 24 && c < row.Cells.Count; c++)
                             {
                                 var cellV = row.Cells[c];
                                 if (cellV == null) continue;
                                 var lvl = Math.Max(0, Math.Min(4, cellV.Level));
-                                var rect = new Rectangle(x + form.S(28) + c * (cell + gap), y + r * (cell + gap), cell, cell);
-                                using (var b = new SolidBrush(Theme.Heat[lvl])) g.FillRectangle(b, rect);
+                                var rect = new Rectangle(x + labelW + c * (cell + gap), y + r * (cell + gap), cell, cell);
+                                using (var b = new SolidBrush(Theme.Heat[lvl]))
+                                    Draw.FillRounded(g, b, rect, form.S(2));
                             }
                             r++;
                         }
@@ -1724,22 +3206,6 @@ namespace QuotaPanel
             }
             return y + form.S(12);
         }
-
-        static void FillRounded(Graphics g, Brush brush, Rectangle rect, int radius)
-        {
-            if (rect.Width <= 0 || rect.Height <= 0) return;
-            var d = Math.Min(radius * 2, Math.Min(rect.Width, rect.Height));
-            if (d < 2) { g.FillRectangle(brush, rect); return; }
-            using (var path = new GraphicsPath())
-            {
-                path.AddArc(rect.X, rect.Y, d, d, 180, 90);
-                path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
-                path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
-                path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
-                path.CloseFigure();
-                g.FillPath(brush, path);
-            }
-        }
     }
 
     // =============================================================== settings
@@ -1747,82 +3213,280 @@ namespace QuotaPanel
     class SettingsPanel : Panel
     {
         readonly PanelForm form;
+        ScrollHost scroll;     // scrollable options (dark slim thumb, no native bars)
+        Panel bottomBar;       // pinned Save/Back, always reachable
+        Button saveButton;
         Dictionary<string, CheckBox> checks = new Dictionary<string, CheckBox>();
-        NumericUpDown refreshBox;
+        Slider refreshSlider;
+        Label refreshValue;
         TextBox thresholdsBox;
+        ToolTip tips = new ToolTip();
+        Config current;
 
         public SettingsPanel(PanelForm form)
         {
             this.form = form;
             BackColor = Theme.Background;
-            AutoScroll = true;
+
+            scroll = new ScrollHost();
+            scroll.Dock = DockStyle.Fill;
+
+            bottomBar = new Panel();
+            bottomBar.Dock = DockStyle.Bottom;
+            bottomBar.Height = form.S(54);
+            bottomBar.BackColor = Theme.Card;
+
+            var back = DialogStyle.MakeButton("‹ Back", false);
+            back.Size = new Size(form.S(90), form.S(32));
+            back.Location = new Point(form.S(14), form.S(11));
+            back.TabStop = false;
+            back.Click += delegate { form.SelectView("live"); };
+
+            saveButton = DialogStyle.MakeButton("Save", true);
+            saveButton.Size = new Size(form.S(110), form.S(32));
+            saveButton.TabStop = false;
+            saveButton.Click += delegate { OnSave(); };
+
+            bottomBar.Controls.Add(saveButton);
+            bottomBar.Controls.Add(back);
+            bottomBar.Resize += delegate
+            {
+                saveButton.Location = new Point(bottomBar.Width - saveButton.Width - form.S(14), form.S(11));
+            };
+
+            Controls.Add(scroll);
+            Controls.Add(bottomBar);
         }
 
         public void LoadFrom(Config c)
         {
-            Controls.Clear();
+            current = c;
             checks.Clear();
-            int x = form.S(14);
-            int y = form.S(10);
+            var body = new Panel();
+            body.BackColor = Theme.Background;
 
-            Controls.Add(MakeLabel("PROVIDERS", x, y, true));
-            y += form.S(22);
+            int margin = form.S(14);
+            int y = form.S(12);
+            int innerW = form.ClientSize.Width - margin * 2 - form.S(10);
+
+            // --- providers, with a detection dot per row ----------------------
+            body.Controls.Add(MakeLabel("PROVIDERS", margin, y, true));
+            y += form.S(24);
+            int colW = innerW / 2;
+            int i = 0;
             foreach (var info in Catalog.Supported)
             {
+                int rx = margin + (i % 2) * colW;
+                int ry = y + (i / 2) * form.S(28);
+
+                var dot = new Label();
+                dot.Text = "●";
+                dot.AutoSize = true;
+                dot.Font = new Font("Segoe UI", 8f);
+                dot.BackColor = Theme.Background;
+                string tipText;
+                dot.ForeColor = DetectionColor(info.Id, out tipText);
+                dot.Location = new Point(rx, ry + form.S(3));
+                tips.SetToolTip(dot, info.Name + ": " + tipText);
+                body.Controls.Add(dot);
+
                 var cb = new CheckBox();
                 cb.Text = info.Name;
                 cb.ForeColor = Theme.Text;
                 cb.BackColor = Theme.Background;
-                cb.Location = new Point(x, y);
-                cb.Width = form.S(170);
+                cb.Location = new Point(rx + form.S(18), ry);
+                cb.Width = colW - form.S(24);
                 cb.Checked = c.IsEnabled(info.Id);
                 checks[info.Id] = cb;
-                Controls.Add(cb);
-                y += form.S(26);
+                body.Controls.Add(cb);
+                i++;
             }
+            y += ((Catalog.Supported.Length + 1) / 2) * form.S(28) + form.S(6);
+            var legend = MakeLabel("Dots: green data · orange sign-in needed · red error", margin, y, false);
+            body.Controls.Add(legend);
+            y += form.S(28);
 
-            y += form.S(8);
-            Controls.Add(MakeLabel("REFRESH INTERVAL (SECONDS)", x, y, true));
-            y += form.S(22);
-            refreshBox = new NumericUpDown();
-            refreshBox.Minimum = 30;
-            refreshBox.Maximum = 1800;
-            refreshBox.Increment = 30;
-            refreshBox.Value = Math.Max(30, Math.Min(1800, c.RefreshSeconds));
-            refreshBox.Location = new Point(x, y);
-            refreshBox.Width = form.S(90);
-            Controls.Add(refreshBox);
-            y += form.S(34);
+            // --- accounts (in-app sign-in, like the macOS Settings) ----------
+            body.Controls.Add(MakeLabel("ACCOUNTS", margin, y, true));
+            y += form.S(24);
+            y = AddAccountRow(body, "claude", "Claude Code", margin, innerW, y);
+            y = AddAccountRow(body, "codex", "Codex", margin, innerW, y);
+            y += form.S(10);
 
-            Controls.Add(MakeLabel("ALERT THRESHOLDS (%, COMMA-SEPARATED — EMPTY DISABLES)", x, y, true));
+            // --- refresh interval slider -------------------------------------
+            body.Controls.Add(MakeLabel("REFRESH INTERVAL", margin, y, true));
+            refreshValue = new Label();
+            refreshValue.AutoSize = true;
+            refreshValue.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+            refreshValue.ForeColor = Theme.Accent;
+            refreshValue.BackColor = Theme.Background;
+            refreshValue.Text = IntervalText(c.RefreshSeconds);
+            refreshValue.Location = new Point(margin + innerW - form.S(60), y - form.S(2));
+            body.Controls.Add(refreshValue);
             y += form.S(22);
-            thresholdsBox = new TextBox();
-            thresholdsBox.Text = string.Join(", ", c.AlertThresholds
-                .Select(t => t.ToString(CultureInfo.InvariantCulture)).ToArray());
-            thresholdsBox.Location = new Point(x, y);
-            thresholdsBox.Width = form.S(200);
-            thresholdsBox.BackColor = Theme.Card;
-            thresholdsBox.ForeColor = Theme.Text;
-            Controls.Add(thresholdsBox);
+
+            refreshSlider = new Slider();
+            refreshSlider.Minimum = 30;
+            refreshSlider.Maximum = 1800;
+            refreshSlider.Step = 30;
+            refreshSlider.Value = Math.Max(30, Math.Min(1800, c.RefreshSeconds));
+            refreshSlider.SetBounds(margin, y, innerW, form.S(26));
+            refreshSlider.ValueChanged += delegate
+            {
+                refreshValue.Text = IntervalText(refreshSlider.Value);
+                refreshValue.Left = margin + innerW - refreshValue.Width;
+            };
+            body.Controls.Add(refreshSlider);
             y += form.S(36);
 
-            var save = new Button();
-            save.Text = "Save";
-            save.FlatStyle = FlatStyle.Flat;
-            save.ForeColor = Theme.Text;
-            save.BackColor = Theme.Card;
-            save.Location = new Point(x, y);
-            save.Click += delegate { SaveTo(c); };
-            Controls.Add(save);
+            // --- alert thresholds --------------------------------------------
+            body.Controls.Add(MakeLabel("ALERT THRESHOLDS (%)", margin, y, true));
+            y += form.S(24);
+            var boxHost = new Panel();
+            boxHost.BackColor = Theme.Card;
+            boxHost.SetBounds(margin, y, form.S(220), form.S(28));
+            thresholdsBox = new TextBox();
+            thresholdsBox.Text = string.Join(", ", current.AlertThresholds
+                .Select(t => t.ToString(CultureInfo.InvariantCulture)).ToArray());
+            thresholdsBox.BorderStyle = BorderStyle.None;
+            thresholdsBox.BackColor = Theme.Card;
+            thresholdsBox.ForeColor = Theme.Text;
+            thresholdsBox.SetBounds(form.S(8), form.S(6), form.S(204), form.S(18));
+            boxHost.Controls.Add(thresholdsBox);
+            body.Controls.Add(boxHost);
+            y += form.S(34);
 
-            var back = new Button();
-            back.Text = "Back";
-            back.FlatStyle = FlatStyle.Flat;
-            back.ForeColor = Theme.SubText;
-            back.BackColor = Theme.Background;
-            back.Location = new Point(x + form.S(90), y);
-            back.Click += delegate { form.SelectView("live"); };
-            Controls.Add(back);
+            body.Controls.Add(MakeLabel("Comma-separated · empty disables · max 6", margin, y, false));
+            y += form.S(30);
+
+            body.Height = y;
+            scroll.SetContent(body);
+            scroll.ScrollTo(0);
+            HookWheel(body);
+        }
+
+        // --- accounts row ----------------------------------------------------
+
+        int AddAccountRow(Panel body, string id, string name, int margin, int innerW, int y)
+        {
+            var card = new Panel();
+            card.BackColor = Theme.Card;
+            card.SetBounds(margin, y, innerW, form.S(44));
+
+            var glyph = new AccountGlyph(id);
+            glyph.SetBounds(form.S(10), form.S(11), form.S(22), form.S(22));
+            card.Controls.Add(glyph);
+
+            var title = new Label();
+            title.Text = name;
+            title.AutoSize = true;
+            title.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            title.ForeColor = Theme.Text;
+            title.BackColor = Theme.Card;
+            title.Location = new Point(form.S(40), form.S(5));
+            card.Controls.Add(title);
+
+            var state = new Label();
+            state.AutoSize = true;
+            state.Font = new Font("Segoe UI", 8f);
+            state.BackColor = Theme.Card;
+            bool inApp;
+            state.Text = AccountState(id, out inApp);
+            state.ForeColor = inApp ? Theme.Green : Theme.SubText;
+            state.Location = new Point(form.S(40), form.S(23));
+            card.Controls.Add(state);
+
+            var button = DialogStyle.MakeButton(inApp ? "Sign out" : "Sign in…", !inApp);
+            button.Size = new Size(form.S(84), form.S(28));
+            button.Location = new Point(innerW - form.S(94), form.S(8));
+            button.TabStop = false;
+            button.Click += delegate
+            {
+                if (CredStore.Has(id))
+                {
+                    CredStore.Delete(id);
+                    LoadFrom(current);       // rebuild rows
+                    form.RequestRefresh();
+                    return;
+                }
+                var err = id == "claude"
+                    ? OAuthFlows.SignInClaude(form)
+                    : OAuthFlows.SignInCodex(form);
+                if (err == null)
+                {
+                    LoadFrom(current);
+                    form.RequestRefresh();
+                }
+                else if (err.Length > 0)
+                {
+                    MessageBox.Show(form, err, "Sign-in failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+            card.Controls.Add(button);
+
+            body.Controls.Add(card);
+            return y + form.S(52);
+        }
+
+        string AccountState(string id, out bool inApp)
+        {
+            inApp = CredStore.Has(id);
+            if (inApp) return "Signed in via QuotaPanel";
+            var home = CredStore.Home;
+            var cliFile = id == "claude"
+                ? Path.Combine(home, ".claude", ".credentials.json")
+                : Path.Combine(home, ".codex", "auth.json");
+            try { if (File.Exists(cliFile)) return "Using the " + id + " CLI's sign-in"; }
+            catch (Exception) { }
+            return "Signed out";
+        }
+
+        Color DetectionColor(string id, out string tip)
+        {
+            var status = form.Status;
+            var p = status != null ? status.Find(id) : null;
+            if (p == null) { tip = "no data yet"; return Theme.Track; }
+            if (p.Status == "ok") { tip = "detected — data OK"; return Theme.Green; }
+            if (p.Status == "authProblem")
+            {
+                tip = p.Message != null ? p.Message : "needs sign-in";
+                return Theme.Orange;
+            }
+            if (p.Status == "error")
+            {
+                tip = p.Message != null ? p.Message : "error";
+                return Theme.Red;
+            }
+            tip = "loading…";
+            return Theme.SubText;
+        }
+
+        // Wheel events land on whichever child is focused; route them all to
+        // the scroll host so the option list actually scrolls.
+        void HookWheel(Control root)
+        {
+            foreach (Control ch in root.Controls)
+            {
+                if (ch is TextBox || ch is Slider) continue;  // keep native wheel/drag
+                ch.MouseWheel += OnChildWheel;
+                HookWheel(ch);
+            }
+        }
+
+        void OnChildWheel(object sender, MouseEventArgs e)
+        {
+            var he = e as HandledMouseEventArgs;
+            if (he != null) he.Handled = true;
+            ScrollBy(-Math.Sign(e.Delta) * form.S(60));
+        }
+
+        public void ScrollBy(int delta) { scroll.ScrollBy(delta); }
+
+        static string IntervalText(int seconds)
+        {
+            if (seconds % 60 == 0) return (seconds / 60) + " min";
+            return (seconds / 60.0).ToString("0.#", CultureInfo.InvariantCulture) + " min";
         }
 
         Label MakeLabel(string text, int x, int y, bool isSection)
@@ -1832,18 +3496,20 @@ namespace QuotaPanel
             l.AutoSize = true;
             l.Location = new Point(x, y);
             l.ForeColor = Theme.SubText;
-            l.Font = new Font("Segoe UI", isSection ? 7.5f : 9f, isSection ? FontStyle.Bold : FontStyle.Regular);
+            l.BackColor = Theme.Background;
+            l.Font = new Font("Segoe UI", isSection ? 7.5f : 8f, isSection ? FontStyle.Bold : FontStyle.Regular);
             return l;
         }
 
-        void SaveTo(Config c)
+        void OnSave()
         {
+            if (current == null) return;
             var enabled = new List<string>();
             foreach (var pair in checks)
                 if (pair.Value.Checked) enabled.Add(pair.Key);
             // all checked = null (daemon default "all supported")
-            c.EnabledProviders = enabled.Count == Catalog.Supported.Length ? null : enabled;
-            c.RefreshSeconds = (int)refreshBox.Value;
+            current.EnabledProviders = enabled.Count == Catalog.Supported.Length ? null : enabled;
+            current.RefreshSeconds = refreshSlider.Value;
 
             var thresholds = new List<double>();
             foreach (var part in thresholdsBox.Text.Split(','))
@@ -1855,9 +3521,39 @@ namespace QuotaPanel
             }
             thresholds.Sort();
             if (thresholds.Count > 6) thresholds = thresholds.Take(6).ToList();
-            c.AlertThresholds = thresholds;
+            current.AlertThresholds = thresholds;
 
-            form.ApplySettings(c);
+            form.ApplySettings(current);
+        }
+    }
+
+    /// Small brand glyph for the account rows (SVG if available, letter disc
+    /// fallback).
+    class AccountGlyph : DoubleBufferedControl
+    {
+        readonly string id;
+
+        public AccountGlyph(string id)
+        {
+            this.id = id;
+            BackColor = Theme.Card;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            var info = Catalog.Find(id);
+            var brand = Theme.GlyphTint(Theme.Brand(info != null ? info.ColorHex : "#888888"));
+            if (!SvgIcon.Draw(g, id, new RectangleF(0, 0, Width, Height), brand))
+            {
+                using (var b = new SolidBrush(brand)) g.FillEllipse(b, 0, 0, Width - 1, Height - 1);
+                using (var f = new Font("Segoe UI", 8f, FontStyle.Bold))
+                    TextRenderer.DrawText(g, info != null ? info.ShortLabel : "?", f,
+                        new Rectangle(0, 0, Width, Height), Color.White,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
         }
     }
 }

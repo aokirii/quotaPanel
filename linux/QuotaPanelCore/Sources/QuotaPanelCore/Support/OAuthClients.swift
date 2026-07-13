@@ -47,4 +47,5 @@ enum OAuthClients {
 
     static var gemini: Client { client("gemini") }
     static var codex: Client { client("codex") }
+    static var claude: Client { client("claude") }
 }

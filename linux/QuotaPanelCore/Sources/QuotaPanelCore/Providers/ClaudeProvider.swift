@@ -50,13 +50,58 @@ enum ClaudeProvider {
     }
 
     static func fetch() async -> ProviderSnapshot {
+        // In-app sign-in (the shared ~/.quotapanel store written by the
+        // QuotaPanel front-ends) takes priority over the CLI's file.
+        if var stored = CredentialStore.load("claude") {
+            if stored.isExpired, let renewed = await refreshStored(stored) {
+                stored = renewed
+                CredentialStore.save(stored, for: "claude")
+            }
+            if !stored.isExpired {
+                return await fetchUsage(token: stored.accessToken, plan: planName(stored.plan))
+            }
+            // dead in-app token: fall through to the CLI credentials
+        }
         guard let creds = loadCredentials() else {
-            return snapshot(.authProblem("No credentials — run `claude` once to sign in"))
+            return snapshot(.authProblem("No credentials — sign in from Settings or run `claude` once"))
         }
         if creds.isExpired {
             return snapshot(.authProblem("CLI token expired — run `claude` once to refresh"), plan: planName(creds.subscriptionType))
         }
         return await fetchUsage(token: creds.accessToken, plan: planName(creds.subscriptionType))
+    }
+
+    /// refresh_token flow for the in-app credentials via Anthropic's token
+    /// endpoint; needs the Claude Code client id from oauth-clients.json.
+    private static func refreshStored(_ creds: StoredCredentials) async -> StoredCredentials? {
+        guard let refreshToken = creds.refreshToken, !refreshToken.isEmpty else { return nil }
+        let clientID = OAuthClients.claude.id
+        guard !clientID.isEmpty else { return nil }
+
+        var request = URLRequest(url: URL(string: "https://console.anthropic.com/v1/oauth/token")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: String] = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientID,
+        ]
+        guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        request.httpBody = payload
+
+        guard let (data, response) = try? await HTTP.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["access_token"] as? String, !token.isEmpty
+        else { return nil }
+
+        var renewed = creds
+        renewed.accessToken = token
+        if let fresh = json["refresh_token"] as? String, !fresh.isEmpty { renewed.refreshToken = fresh }
+        if let seconds = json["expires_in"] as? Double { renewed.expiresAt = Date(timeIntervalSinceNow: seconds) }
+        if let plan = json["subscription_type"] as? String { renewed.plan = plan }
+        return renewed
     }
 
     private static func fetchUsage(token: String, plan: String?) async -> ProviderSnapshot {

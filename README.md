@@ -10,7 +10,11 @@ QuotaPanel keeps an eye on your AI coding-tool usage quotas — Claude Code, Cod
 
 - **macOS** — macOS 14 or newer (Apple Silicon) and the Xcode Command Line Tools (`xcode-select --install`).
 - **Linux** — GNOME Shell 45–49. The installer takes care of everything else.
-- **Windows** — Windows 10/11 and the [Swift toolchain](https://www.swift.org/install/windows/) (the installer can fetch it via winget). The tray app itself compiles with the C# compiler Windows ships in-box — no .NET SDK needed.
+- **Windows** — Windows 10/11 with:
+  - Visual Studio 2022 or the [Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with the **Desktop development with C++** workload — it provides the MSVC toolchain and the Windows SDK that the Swift compiler links against. This is required; the Swift toolchain alone is not enough.
+  - The [Swift toolchain](https://www.swift.org/install/windows/) (the installer can fetch it via winget).
+
+  The tray app itself compiles with the C# compiler Windows ships in-box — no .NET SDK needed.
 
 ## Installation
 
@@ -35,7 +39,7 @@ linux/install.sh
 
 When the script finishes, reload GNOME Shell once — Xorg: press `Alt`+`F2`, type `r`, press Enter; Wayland: log out and back in. The QuotaPanel icon then appears in the top bar.
 
-### Windows — experimental, not yet tested
+### Windows
 
 ```powershell
 git clone https://github.com/aokirii/quotaPanel.git
@@ -43,9 +47,9 @@ cd quotaPanel
 powershell -ExecutionPolicy Bypass -File windows\install.ps1
 ```
 
-The script builds the same portable Swift daemon the Linux port uses, compiles the tray app, installs both under `%LOCALAPPDATA%\QuotaPanel`, and starts it — the QuotaPanel icon appears in the system tray. Right-click it to enable *Start with Windows*. For Gemini/Codex token refresh, copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to `%APPDATA%\quotapanel\oauth-clients.json` and fill it in.
+The script imports the Visual Studio build environment, builds the same portable Swift daemon the Linux port uses, compiles the tray app with the in-box C# compiler, installs both (plus the provider icons) under `%LOCALAPPDATA%\QuotaPanel`, and starts it — the QuotaPanel icon appears in the system tray. Right-click it to enable *Start with Windows*. For token refresh and the in-app sign-in (Settings → Accounts, Claude and Codex), copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to `%APPDATA%\quotapanel\oauth-clients.json` and fill it in.
 
-> **Status:** code-complete first pass, not yet built or tested on real Windows hardware.
+> **Status:** builds and runs on Windows 11. The Windows tray is newer than the macOS and Linux front-ends, so if you hit a rough edge please open an issue.
 
 To update on any platform, pull the latest changes and run the same build or install command again.
 
