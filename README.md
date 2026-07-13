@@ -49,3 +49,7 @@ Providers are picked up automatically: sign in to a tool with its own CLI or app
 ## License
 
 Released under the [MIT License](LICENSE). Provider icons originate from [CodexBar](https://github.com/steipete/CodexBar), also MIT licensed.
+
+## Credits
+
+QuotaPanel is the successor to [ai-token-tracker](https://github.com/aokirii/ai-token-tracker) and was inspired by [CodexBar](https://github.com/steipete/CodexBar).
