@@ -42,7 +42,17 @@ Click the QuotaPanel icon to open the panel.
 
 - The strip at the top lists your providers; click a chip to inspect that provider. The small bar under each chip reflects its current session usage, and the same percentage is shown next to the icon in the bar.
 - **Live** shows the selected provider's rate-limit windows with reset times; for Claude Code and Codex it also shows how full each open session's context window is and a 14-day cost/token chart. **Summary** and **Heatmap** show usage history at a glance.
+
+  <p>
+    <img src="docs/panel-summary.png" width="300" alt="Summary view">
+    <img src="docs/panel-heatmap.png" width="300" alt="Heatmap view">
+  </p>
+
 - **Settings** (the gear at the bottom) lets you choose which providers to show, how often to refresh, and usage thresholds that raise desktop notifications.
+
+  <p>
+    <img src="docs/settings-providers.png" width="300" alt="Settings">
+  </p>
 
 Providers are picked up automatically: sign in to a tool with its own CLI or app (for example `claude` or `codex`) and it shows data on the next refresh; anything else is listed as not signed in until you do. QuotaPanel only ever reads those credentials — it never modifies them, and nothing leaves your machine.
 
