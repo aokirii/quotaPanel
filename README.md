@@ -88,6 +88,27 @@ Settings → **Accounts** lets you authenticate Claude & Codex without ever touc
 
 Tokens refresh themselves automatically when they expire, so usage keeps flowing without ever running `claude` or `codex` again. *Sign out* removes only QuotaPanel's own credentials. Every other provider is read-only from whatever credentials its own tool already stored.
 
+## OAuth client configuration
+
+For a few providers, QuotaPanel authenticates with the **public OAuth client** that the provider's own CLI ships (e.g. `gemini-cli`, `codex`, Claude Code). Those client identifiers are **not committed to this repository** — the app reads them at runtime from a local, git-ignored file, so nothing OAuth-shaped ever lands in git:
+
+- **macOS:** `~/.quotapanel/oauth-clients.json`
+- **Linux:** `~/.config/quotapanel/oauth-clients.json`
+
+Copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to that path and fill in each provider's public client (the same values its CLI already bundles):
+
+```json
+{
+  "gemini": { "clientId": "…apps.googleusercontent.com", "clientSecret": "GOCSPX-…" },
+  "codex":  { "clientId": "app_…" },
+  "claude": { "clientId": "…" }
+}
+```
+
+Environment variables (`QUOTAPANEL_GEMINI_CLIENT_SECRET`, `QUOTAPANEL_CODEX_CLIENT_ID`, …) work too and take precedence over the file.
+
+**Without this file**, providers that only *read* an already-valid CLI token keep working until that token expires; once a token refresh or an in-app sign-in is needed, the affected provider shows "sign in again" until you add the file (or just run its CLI again). Providers that don't use OAuth are unaffected.
+
 ## Linux (GNOME) — experimental, not yet tested
 
 A parallel GNOME Shell port lives under [`linux/`](linux/). It splits QuotaPanel in two: a portable Swift daemon (`quotapanel-daemon`) that fetches quotas and writes `~/.config/quotapanel/status.json`, and a GNOME Shell extension that renders it in the top bar — click to open, click again to close — with the same **5-hour session window** behavior as the menu bar on macOS.
@@ -102,7 +123,7 @@ QuotaPanel is designed to keep everything on your machine:
 - **Credentials never leave your Mac.** In-app sign-ins are stored in `~/.quotapanel/credentials.json`, readable only by your user (`0600`), outside any repository. The OAuth sign-in callback server binds to `127.0.0.1` only.
 - **CLI credentials are read-only.** The Claude Code Keychain item, `~/.codex/auth.json`, and every other provider's CLI/editor credentials are never written to — signing out of QuotaPanel never touches your CLI logins.
 - **Local logs stay local.** Cost, context, summary, and heatmap data are computed by scanning `~/.claude/projects` and `~/.codex/sessions` on-device; nothing is uploaded anywhere.
-- **Nothing sensitive can land in the repo.** Credentials live outside the project; `.gitignore` additionally excludes credential-shaped files as a safety net.
+- **Nothing sensitive lives in the repo.** Personal credentials live outside the project, and even the providers' *public* OAuth client identifiers are loaded at runtime from a git-ignored `oauth-clients.json` (see [OAuth client configuration](#oauth-client-configuration)) rather than committed. `.gitignore` additionally excludes credential-shaped files as a safety net.
 
 ## Troubleshooting
 

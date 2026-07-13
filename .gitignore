@@ -5,6 +5,7 @@ DerivedData/
 .DS_Store
 credentials.json
 *.credentials.json
+oauth-clients.json
 auth.json
 .env
 .env.*

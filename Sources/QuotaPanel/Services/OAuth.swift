@@ -54,7 +54,9 @@ enum OAuthError: LocalizedError {
 /// Sign-in via Claude Code's public OAuth client. After approval the browser
 /// page shows a code ("code#state") that the user pastes into the panel.
 enum ClaudeAuth {
-    static let clientID = "REDACTED-CLAUDE-CLIENT-ID"
+    /// Claude Code's public OAuth client ID, loaded at runtime from
+    /// ~/.quotapanel/oauth-clients.json — never committed. See OAuthClients.
+    static var clientID: String { OAuthClients.claude.id }
     private static let authorizeURL = "https://claude.ai/oauth/authorize"
     private static let tokenURL = URL(string: "https://console.anthropic.com/v1/oauth/token")!
     private static let redirectURI = "https://console.anthropic.com/oauth/code/callback"
@@ -155,7 +157,9 @@ enum ClaudeAuth {
 /// after approval, auth.openai.com redirects to `localhost:1455/auth/callback`;
 /// the in-app mini server catches the code and exchanges it for tokens.
 enum CodexAuth {
-    static let clientID = "app_REDACTED"
+    /// The Codex CLI's public OAuth client ID, loaded at runtime from
+    /// ~/.quotapanel/oauth-clients.json — never committed. See OAuthClients.
+    static var clientID: String { OAuthClients.codex.id }
     private static let authorizeURL = "https://auth.openai.com/oauth/authorize"
     private static let tokenURL = URL(string: "https://auth.openai.com/oauth/token")!
     static let callbackPort: UInt16 = 1455

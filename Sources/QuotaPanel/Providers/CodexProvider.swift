@@ -5,8 +5,9 @@ import Foundation
 enum CodexProvider {
     private static let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     private static let refreshURL = URL(string: "https://auth.openai.com/oauth/token")!
-    /// The Codex CLI's public OAuth client ID (the app that produces auth.json)
-    private static let clientID = "app_REDACTED"
+    /// The Codex CLI's public OAuth client ID (the app that produces auth.json).
+    /// Loaded at runtime from ~/.quotapanel/oauth-clients.json — never committed.
+    private static var clientID: String { OAuthClients.codex.id }
 
     struct Credentials {
         let accessToken: String

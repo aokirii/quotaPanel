@@ -8,9 +8,10 @@ enum GeminiProvider {
     private static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     private static let loadURL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!
     private static let quotaURL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!
-    /// gemini-cli's public OAuth client (not a secret; ships in the CLI bundle)
-    private static let clientID = "REDACTED.apps.googleusercontent.com"
-    private static let clientSecret = "GOCSPX-REDACTED"
+    /// gemini-cli's public OAuth client (ships in the CLI bundle). Loaded at
+    /// runtime from ~/.quotapanel/oauth-clients.json — never committed. See OAuthClients.
+    private static var clientID: String { OAuthClients.gemini.id }
+    private static var clientSecret: String { OAuthClients.gemini.secret }
 
     static func fetch() async -> ProviderSnapshot {
         guard var creds = loadCreds() else {
