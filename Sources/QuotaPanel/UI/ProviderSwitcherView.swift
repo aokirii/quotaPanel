@@ -60,8 +60,7 @@ struct ProviderChip: View {
 
     private var sessionPercent: Double? {
         guard case .ok = snapshot.status else { return nil }
-        let session = snapshot.windows.first { $0.label.hasPrefix("Session") } ?? snapshot.worstWindow
-        return session?.clampedPercent
+        return snapshot.menuBarWindow?.clampedPercent
     }
 
     private var barHelp: String {

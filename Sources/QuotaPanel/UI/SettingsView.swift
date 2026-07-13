@@ -4,6 +4,7 @@ import ServiceManagement
 struct SettingsView: View {
     @Bindable var settings: Settings
     @Bindable var auth: AuthManager
+    let notifier: Notifier
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchError: String?
 
@@ -79,6 +80,18 @@ struct SettingsView: View {
         }
     }
 
+    private let providerColumns = [
+        GridItem(.flexible(), spacing: 8, alignment: .leading),
+        GridItem(.flexible(), spacing: 8, alignment: .leading),
+    ]
+
+    private func providerBinding(_ provider: Provider) -> Binding<Bool> {
+        Binding(
+            get: { settings.isEnabled(provider) },
+            set: { settings.setEnabled(provider, $0) }
+        )
+    }
+
     /// Safe binding to an array element from ForEach: writes to a stale index
     /// right after a row is deleted are silently ignored
     private func thresholdBinding(_ index: Int) -> Binding<Double> {
@@ -93,14 +106,75 @@ struct SettingsView: View {
         )
     }
 
+    /// Live notification-permission status plus a test button. Makes a silent
+    /// macOS denial visible — otherwise thresholds appear "not to work" when
+    /// really the OS is blocking delivery.
+    @ViewBuilder
+    private var notificationStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle().fill(notificationStatusColor).frame(width: 6, height: 6)
+                Text(notificationStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if notifier.permission.isDelivering {
+                    Button("Test") { notifier.sendTest() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                } else if notifier.permission == .notDetermined {
+                    Button("Enable") { notifier.requestAuthorization() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                } else if notifier.permission == .denied {
+                    Button("Open Settings") { notifier.openSystemSettings() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            }
+            if notifier.permission == .denied {
+                Text("macOS is blocking notifications for this app. Enable them in System Settings → Notifications → QuotaPanel. A signed release grants them normally.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var notificationStatusText: String {
+        switch notifier.permission {
+        case .unknown: "Notifications: checking…"
+        case .unsupported: "Notifications need the .app bundle"
+        case .notDetermined: "Notifications: permission not granted yet"
+        case .denied: "Notifications: blocked by macOS"
+        case .authorized: "Notifications: on"
+        case .provisional: "Notifications: quiet delivery"
+        }
+    }
+
+    private var notificationStatusColor: Color {
+        switch notifier.permission {
+        case .authorized, .provisional: .green
+        case .denied: .red
+        case .notDetermined, .unsupported: .orange
+        case .unknown: .gray
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings")
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Claude Code", isOn: $settings.claudeEnabled)
-                Toggle("Codex", isOn: $settings.codexEnabled)
+                // Two columns keep the 20+ providers from making the panel
+                // impossibly tall.
+                LazyVGrid(columns: providerColumns, alignment: .leading, spacing: 6) {
+                    ForEach(Provider.allCases) { provider in
+                        Toggle(provider.displayName, isOn: providerBinding(provider))
+                            .lineLimit(1)
+                    }
+                }
                 Toggle("Show percent in menu bar", isOn: $settings.showPercentInMenuBar)
             }
 
@@ -145,19 +219,49 @@ struct SettingsView: View {
                 .buttonStyle(.borderless)
                 .disabled(settings.alertThresholds.count >= Settings.maxAlertThresholds)
                 .help("Up to \(Settings.maxAlertThresholds) thresholds")
+
+                notificationStatus
+                    .padding(.top, 2)
             }
             .font(.callout)
+            .task { await notifier.refreshStatus() }
 
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Accounts")
                     .font(.callout.weight(.semibold))
-                accountRow(.claude)
-                accountRow(.codex)
+                ForEach(Provider.allCases.filter(\.supportsInAppSignIn)) { provider in
+                    accountRow(provider)
+                }
                 Text("Sign-ins are stored only on this Mac (~/.quotapanel, readable only by you). CLI credentials are never modified; when there is no QuotaPanel sign-in, CLI credentials are used instead.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+
+                let cliProviders = Provider.allCases.filter { !$0.supportsInAppSignIn }
+                if !cliProviders.isEmpty {
+                    Divider()
+                    Text("Detected from CLI/editor credentials")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(cliProviders) { provider in
+                        HStack {
+                            Circle().fill(provider.brandColor).frame(width: 6, height: 6)
+                            Text(provider.displayName)
+                                .font(.callout)
+                            Spacer()
+                            if provider.hasLocalCredentials {
+                                Text("Detected ✓")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text("Not found")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
             }
 
             Divider()

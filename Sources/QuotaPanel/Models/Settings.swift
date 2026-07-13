@@ -15,11 +15,10 @@ final class Settings {
     var alertThresholds: [Double] {
         didSet { UserDefaults.standard.set(alertThresholds, forKey: "alertThresholds") }
     }
-    var claudeEnabled: Bool {
-        didSet { UserDefaults.standard.set(claudeEnabled, forKey: "claudeEnabled") }
-    }
-    var codexEnabled: Bool {
-        didSet { UserDefaults.standard.set(codexEnabled, forKey: "codexEnabled") }
+    /// Enabled providers by rawValue; defaults to providers whose tools have
+    /// left credentials on this machine
+    var enabledProviders: Set<String> {
+        didSet { UserDefaults.standard.set(Array(enabledProviders).sorted(), forKey: "enabledProviders") }
     }
     /// Whether to show the percent text in the menu bar (icon only when off)
     var showPercentInMenuBar: Bool {
@@ -44,8 +43,18 @@ final class Settings {
             let critical = d.object(forKey: "criticalThreshold") as? Double ?? 95
             self.alertThresholds = warn == critical ? [warn] : [warn, critical].sorted()
         }
-        self.claudeEnabled = d.object(forKey: "claudeEnabled") as? Bool ?? true
-        self.codexEnabled = d.object(forKey: "codexEnabled") as? Bool ?? true
+        if let list = d.object(forKey: "enabledProviders") as? [String] {
+            self.enabledProviders = Set(list)
+        } else {
+            // Migration from the two-provider era + auto-detection for the rest
+            var initial = Set<String>()
+            if d.object(forKey: "claudeEnabled") as? Bool ?? true { initial.insert(Provider.claude.rawValue) }
+            if d.object(forKey: "codexEnabled") as? Bool ?? true { initial.insert(Provider.codex.rawValue) }
+            for provider in Provider.allCases where provider.hasLocalCredentials {
+                initial.insert(provider.rawValue)
+            }
+            self.enabledProviders = initial
+        }
         self.showPercentInMenuBar = d.object(forKey: "showPercentInMenuBar") as? Bool ?? true
     }
 
@@ -72,6 +81,14 @@ final class Settings {
     }
 
     func isEnabled(_ provider: Provider) -> Bool {
-        provider == .claude ? claudeEnabled : codexEnabled
+        enabledProviders.contains(provider.rawValue)
+    }
+
+    func setEnabled(_ provider: Provider, _ enabled: Bool) {
+        if enabled {
+            enabledProviders.insert(provider.rawValue)
+        } else {
+            enabledProviders.remove(provider.rawValue)
+        }
     }
 }

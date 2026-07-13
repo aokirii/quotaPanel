@@ -1,0 +1,81 @@
+{
+  "generatedAt" : "2026-07-13T09:30:00Z",
+  "providers" : [
+    {
+      "brandColor" : "#d97757",
+      "id" : "claude",
+      "name" : "Claude Code",
+      "plan" : "Max 20x",
+      "shortLabel" : "C",
+      "status" : "ok",
+      "updatedAt" : "2026-07-13T09:30:00Z",
+      "windows" : [
+        {
+          "label" : "5-hour",
+          "percent" : 42.5,
+          "resetsAt" : "2026-07-13T12:00:00Z"
+        },
+        {
+          "label" : "Weekly",
+          "percent" : 68,
+          "resetsAt" : "2026-07-18T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "brandColor" : "#10a37f",
+      "id" : "codex",
+      "name" : "Codex",
+      "plan" : "Plus",
+      "shortLabel" : "X",
+      "status" : "ok",
+      "updatedAt" : "2026-07-13T09:30:00Z",
+      "windows" : [
+        {
+          "label" : "5-hour",
+          "percent" : 12,
+          "resetsAt" : "2026-07-13T11:15:00Z"
+        }
+      ]
+    },
+    {
+      "brandColor" : "#8250df",
+      "id" : "copilot",
+      "name" : "Copilot",
+      "plan" : "Pro",
+      "shortLabel" : "Co",
+      "status" : "ok",
+      "updatedAt" : "2026-07-13T09:30:00Z",
+      "windows" : [
+        {
+          "label" : "Premium requests",
+          "percent" : 91,
+          "resetsAt" : "2026-08-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "brandColor" : "#4285f4",
+      "id" : "gemini",
+      "message" : "Sign in with the Gemini CLI, then Refresh.",
+      "name" : "Gemini",
+      "shortLabel" : "G",
+      "status" : "authProblem",
+      "windows" : [
+
+      ]
+    },
+    {
+      "brandColor" : "#938bb4",
+      "id" : "warp",
+      "message" : "Set WARP_API_KEY to enable Warp.",
+      "name" : "Warp",
+      "shortLabel" : "Wa",
+      "status" : "error",
+      "windows" : [
+
+      ]
+    }
+  ],
+  "version" : 1
+}

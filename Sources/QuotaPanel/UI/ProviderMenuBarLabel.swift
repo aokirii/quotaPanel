@@ -14,7 +14,7 @@ struct CombinedMenuBarLabel: View {
 }
 
 /// One provider's menu bar unit: brand icon, optional percent, and a mini
-/// usage bar of the fullest window underneath
+/// usage bar of the 5-hour session window (or the fullest window as a fallback)
 struct ProviderMenuBarLabel: View {
     let state: AppState
     let provider: Provider
@@ -37,8 +37,8 @@ struct ProviderMenuBarLabel: View {
     private func statusText(_ snapshot: ProviderSnapshot) -> String {
         switch snapshot.status {
         case .ok:
-            guard let worst = snapshot.worstWindow else { return "–" }
-            return "\(formatPercent(worst.clampedPercent))%"
+            guard let window = snapshot.menuBarWindow else { return "–" }
+            return "\(formatPercent(window.clampedPercent))%"
         case .loading: return "…"
         case .authProblem, .error: return "!"
         }
@@ -48,7 +48,7 @@ struct ProviderMenuBarLabel: View {
     private func usageBar(_ snapshot: ProviderSnapshot) -> some View {
         let percent: Double? = {
             guard case .ok = snapshot.status else { return nil }
-            return snapshot.worstWindow?.clampedPercent
+            return snapshot.menuBarWindow?.clampedPercent
         }()
         ZStack(alignment: .leading) {
             Capsule().fill(.quaternary)

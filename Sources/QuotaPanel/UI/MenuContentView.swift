@@ -9,11 +9,27 @@ enum PanelMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Single panel: pick a provider in the strip, its detail renders below
+/// Reports the intrinsic height of the scrollable content so the panel can size
+/// itself to the content but never taller than `maxContentHeight`.
+private struct PanelHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct MenuContentView: View {
     let state: AppState
     @State private var showSettings = false
     @State private var mode: PanelMode = .live
+    @State private var measuredContentHeight: CGFloat = 0
+
+    /// Cap the panel so it fits on screen; taller content scrolls inside.
+    private let maxContentHeight: CGFloat = 520
+
+    private var panelContentHeight: CGFloat {
+        measuredContentHeight == 0 ? maxContentHeight : min(measuredContentHeight, maxContentHeight)
+    }
 
     /// Falls back to the first enabled provider if the selected one is disabled
     private var provider: Provider {
@@ -31,13 +47,45 @@ struct MenuContentView: View {
 
             header
 
+            // The swappable region scrolls when it is taller than the cap, so
+            // long panels (Settings with all providers, charts) stay reachable
+            // while the header and footer remain pinned.
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
+                        }
+                    )
+            }
+            .frame(height: measuredContentHeight == 0 ? nil : min(measuredContentHeight, maxContentHeight))
+            .scrollBounceBehavior(.basedOnSize)
+            .onPreferenceChange(PanelHeightKey.self) { measuredContentHeight = $0 }
+
+            Divider()
+            footer
+        }
+        .padding(12)
+        .frame(width: 320)
+        .onAppear {
+            if !state.availableProviders.contains(state.selectedProvider) {
+                state.selectedProvider = state.availableProviders[0]
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if showSettings {
-                SettingsView(settings: state.settings, auth: state.auth)
+                SettingsView(settings: state.settings, auth: state.auth, notifier: state.notifier)
             } else if !state.settings.isEnabled(provider) {
                 Text("\(provider.displayName) is disabled — enable it in Settings.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
+            } else if provider.hasLocalLogs {
+                // Summary and Heatmap are derived from local session logs
                 Picker("View", selection: $mode) {
                     ForEach(PanelMode.allCases) { m in
                         Text(m.rawValue).tag(m)
@@ -51,16 +99,9 @@ struct MenuContentView: View {
                 case .history: HistoryView(state: state, provider: provider)
                 case .heatmap: HeatmapView(state: state, provider: provider)
                 }
-            }
-
-            Divider()
-            footer
-        }
-        .padding(12)
-        .frame(width: 320)
-        .onAppear {
-            if !state.availableProviders.contains(state.selectedProvider) {
-                state.selectedProvider = state.availableProviders[0]
+            } else {
+                // Providers without local logs only have live rate windows
+                mainContent
             }
         }
     }
@@ -99,25 +140,27 @@ struct MenuContentView: View {
             sessionParts: state.sessionParts(for: provider)
         )
 
-        Divider()
+        if provider.hasLocalLogs {
+            Divider()
 
-        if provider == .claude {
-            VStack(alignment: .leading, spacing: 2) {
-                CostChartView(title: "Estimated cost (14 days)", stats: state.claudeDaily, showCost: true)
-                HStack {
-                    Text(String(format: "Today: $%.2f", state.claudeCostToday))
-                    Spacer()
-                    Text(String(format: "This month: $%.2f", state.claudeCostThisMonth))
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 2) {
-                CostChartView(title: "Token usage (14 days)", stats: state.codexDaily, showCost: false)
-                Text("Today: \(formatTokenCount(state.codexTokensToday)) tokens")
+            if provider == .claude {
+                VStack(alignment: .leading, spacing: 2) {
+                    CostChartView(title: "Estimated cost (14 days)", stats: state.daily(for: .claude), showCost: true)
+                    HStack {
+                        Text(String(format: "Today: $%.2f", state.costToday(for: .claude)))
+                        Spacer()
+                        Text(String(format: "This month: $%.2f", state.costThisMonth(for: .claude)))
+                    }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    CostChartView(title: "Token usage (14 days)", stats: state.daily(for: provider), showCost: false)
+                    Text("Today: \(formatTokenCount(state.tokensToday(for: provider))) tokens")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }

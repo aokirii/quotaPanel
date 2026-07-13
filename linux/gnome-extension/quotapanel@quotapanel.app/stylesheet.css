@@ -1,0 +1,101 @@
+/* QuotaPanel — GNOME Shell extension styling.
+ *
+ * Colors use the Shell's own theme variables where possible so the panel looks
+ * native in both light and dark. Provider bar fills are set inline from each
+ * provider's brandColor (see extension.js); this file styles everything else. */
+
+.quotapanel-top-label {
+    font-size: 0.9em;
+    font-feature-settings: "tnum";
+}
+
+.quotapanel-body {
+    spacing: 6px;
+    padding: 2px 4px;
+    min-width: 240px;
+}
+
+/* Vertical spacer between providers. */
+.quotapanel-gap {
+    height: 10px;
+}
+
+.quotapanel-provider-header {
+    spacing: 8px;
+}
+
+.quotapanel-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    margin-top: 4px;
+}
+
+.quotapanel-provider-name {
+    font-weight: bold;
+}
+
+.quotapanel-provider-plan {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
+.quotapanel-window {
+    spacing: 3px;
+    padding: 2px 0 2px 18px;
+}
+
+.quotapanel-window-top {
+    spacing: 8px;
+}
+
+.quotapanel-window-label {
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+
+.quotapanel-pct {
+    font-size: 0.9em;
+    font-feature-settings: "tnum";
+    opacity: 0.9;
+}
+
+.quotapanel-pct-high {
+    color: #e5484d;
+    opacity: 1;
+    font-weight: bold;
+}
+
+/* Usage bar. Track is a fixed-width rounded box; the fill is a child whose
+ * width and background-color are set inline per window in extension.js. */
+.quotapanel-bar-track {
+    height: 8px;
+    border-radius: 4px;
+    background-color: rgba(127, 127, 127, 0.25);
+}
+
+.quotapanel-bar-fill {
+    height: 8px;
+    border-radius: 4px;
+}
+
+.quotapanel-reset {
+    font-size: 0.8em;
+    opacity: 0.6;
+}
+
+.quotapanel-note {
+    font-size: 0.9em;
+    opacity: 0.8;
+}
+
+.quotapanel-note-dim {
+    font-size: 0.85em;
+    opacity: 0.6;
+}
+
+.quotapanel-error {
+    font-size: 0.85em;
+    color: #e5484d;
+    padding-left: 18px;
+}
