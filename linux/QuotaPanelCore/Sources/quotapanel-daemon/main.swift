@@ -88,9 +88,12 @@ func parseArguments(_ argv: [String]) -> Options {
 
 @discardableResult
 func refreshOnce(_ opts: Options) async -> Bool {
+    // Local-log scans (Claude/Codex charts, contexts, heatmaps) run alongside
+    // the network fetches.
+    async let extras = LocalUsage.extras(for: opts.providers)
     let snapshots = await Engine.fetchAll(opts.providers)
     do {
-        let file = try StatusJSON.write(snapshots, to: opts.outPath)
+        let file = try StatusJSON.write(snapshots, extras: await extras, to: opts.outPath)
         if opts.alsoStdout, let data = try? StatusJSON.encode(file),
            let text = String(data: data, encoding: .utf8) {
             print(text)
@@ -104,7 +107,17 @@ func refreshOnce(_ opts: Options) async -> Bool {
     }
 }
 
-let opts = parseArguments(Array(CommandLine.arguments.dropFirst()))
+// Secrets from ~/.config/quotapanel/env (existing variables win), so runs
+// spawned by the extension's Refresh see the same keys as the systemd unit.
+EnvFile.loadDefault()
+
+var opts = parseArguments(Array(CommandLine.arguments.dropFirst()))
+
+// Providers disabled in the extension's Settings are skipped unless an
+// explicit --providers list was given on the command line.
+if !CommandLine.arguments.contains("--providers"), let config = UserConfig.load() {
+    opts.providers = config.providerFilter(from: opts.providers)
+}
 
 if let interval = opts.interval {
     stderrLine("quotapanel-daemon: refreshing every \(interval)s (\(opts.providers.count) providers)")

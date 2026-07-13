@@ -8,7 +8,7 @@ import Foundation
 ///
 /// When a value is missing the affected provider degrades gracefully — its token
 /// refresh fails and the panel asks you to sign in through that provider's CLI.
-/// See linux/README.md → "OAuth client configuration".
+/// See `oauth-clients.sample.json` at the repo root for the template.
 ///
 /// Expected file shape:
 /// ```json

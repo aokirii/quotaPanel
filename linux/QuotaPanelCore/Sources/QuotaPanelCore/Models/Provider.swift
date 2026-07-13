@@ -120,6 +120,12 @@ public enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    /// Providers with local session logs get charts, Summary/Heatmap views,
+    /// and context bars; the rest only show live rate windows
+    public var hasLocalLogs: Bool {
+        self == .claude || self == .codex
+    }
+
     /// Whether the provider's tool has left credentials on this machine.
     /// Linux-adapted: XDG paths instead of `~/Library`, no Keychain probe.
     public var hasLocalCredentials: Bool {

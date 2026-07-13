@@ -4,5 +4,5 @@
   "description": "Track AI coding-tool usage quotas (Claude, Codex, Gemini, Copilot and more) from the GNOME top bar. Reads the status.json written by quotapanel-daemon and shows a per-provider usage panel that opens on click.",
   "shell-version": ["45", "46", "47", "48", "49"],
   "url": "https://github.com/quotapanel/QuotaPanel",
-  "version": 1
+  "version": 2
 }

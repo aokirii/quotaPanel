@@ -1,101 +1,343 @@
 /* QuotaPanel — GNOME Shell extension styling.
  *
  * Colors use the Shell's own theme variables where possible so the panel looks
- * native in both light and dark. Provider bar fills are set inline from each
- * provider's brandColor (see extension.js); this file styles everything else. */
+ * native in both light and dark. Provider bar fills, brand dots, and percent
+ * colors are set inline from status.json (see extension.js); this file styles
+ * everything else. Layout mirrors the macOS panel. */
 
 .quotapanel-top-label {
     font-size: 0.9em;
     font-feature-settings: "tnum";
 }
 
-.quotapanel-body {
+/* --- Provider strip ------------------------------------------------------ */
+
+.quotapanel-strip-scroll {
+    max-width: 300px;
+}
+
+.quotapanel-strip {
     spacing: 6px;
-    padding: 2px 4px;
-    min-width: 240px;
+    padding: 2px;
 }
 
-/* Vertical spacer between providers. */
-.quotapanel-gap {
-    height: 10px;
+.quotapanel-chip {
+    border-radius: 8px;
+    padding: 5px 8px;
 }
 
-.quotapanel-provider-header {
+.quotapanel-chip:hover, .quotapanel-chip:focus {
+    background-color: rgba(127, 127, 127, 0.15);
+}
+
+.quotapanel-chip-selected {
+    background-color: rgba(127, 127, 127, 0.28);
+}
+
+.quotapanel-chip-box {
+    spacing: 3px;
+}
+
+.quotapanel-chip-label {
+    font-size: 0.78em;
+}
+
+.quotapanel-chip-bar-track {
+    width: 44px;
+    height: 3px;
+    border-radius: 2px;
+    background-color: rgba(127, 127, 127, 0.25);
+}
+
+.quotapanel-chip-bar-fill {
+    height: 3px;
+    border-radius: 2px;
+}
+
+.quotapanel-icon-fallback-text {
+    font-size: 11px;
+    font-weight: bold;
+    color: white;
+}
+
+/* --- Header / footer ----------------------------------------------------- */
+
+.quotapanel-header {
     spacing: 8px;
+    min-width: 300px;
 }
 
-.quotapanel-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    margin-top: 4px;
+.quotapanel-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
 }
 
 .quotapanel-provider-name {
     font-weight: bold;
+    font-size: 1.05em;
 }
 
-.quotapanel-provider-plan {
+.quotapanel-time {
     font-size: 0.85em;
-    opacity: 0.7;
+    opacity: 0.5;
+}
+
+.quotapanel-icon-button {
+    border-radius: 6px;
+    padding: 4px 6px;
+}
+
+.quotapanel-icon-button:hover, .quotapanel-icon-button:focus {
+    background-color: rgba(127, 127, 127, 0.2);
+}
+
+.quotapanel-footer {
+    min-width: 300px;
+}
+
+/* Three-dot loader shown in place of the refresh icon while the daemon runs. */
+.quotapanel-spinner {
+    spacing: 3px;
+    padding: 5px 1px;
+}
+
+.quotapanel-spinner-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: #9a9996;
+}
+
+/* --- Tabs ----------------------------------------------------------------- */
+
+.quotapanel-tabs {
+    spacing: 2px;
+    border-radius: 7px;
+    background-color: rgba(127, 127, 127, 0.15);
+    padding: 2px;
+    margin-bottom: 4px;
+}
+
+.quotapanel-tab {
+    border-radius: 5px;
+    padding: 3px 0;
+    font-size: 0.9em;
+}
+
+.quotapanel-tab:hover, .quotapanel-tab:focus {
+    background-color: rgba(127, 127, 127, 0.15);
+}
+
+.quotapanel-tab-selected {
+    background-color: #3584e4;
+    color: white;
+    font-weight: bold;
+}
+
+/* --- Body ------------------------------------------------------------------ */
+
+/* The scroll view caps the panel height; taller content (Settings) wheel-scrolls. */
+.quotapanel-body-scroll {
+    max-height: 400px;
+    min-width: 300px;
+}
+
+.quotapanel-body {
+    spacing: 6px;
+    padding: 2px 4px;
+    min-width: 280px;
+}
+
+.quotapanel-divider {
+    height: 1px;
+    background-color: rgba(127, 127, 127, 0.25);
+    margin: 4px 0;
+}
+
+.quotapanel-plan {
+    font-size: 0.78em;
+    padding: 1px 7px;
+    border-radius: 8px;
+    background-color: rgba(127, 127, 127, 0.2);
 }
 
 .quotapanel-window {
     spacing: 3px;
-    padding: 2px 0 2px 18px;
-}
-
-.quotapanel-window-top {
-    spacing: 8px;
+    padding: 2px 0;
 }
 
 .quotapanel-window-label {
-    font-size: 0.9em;
-    opacity: 0.9;
+    font-size: 0.95em;
 }
 
 .quotapanel-pct {
-    font-size: 0.9em;
-    font-feature-settings: "tnum";
-    opacity: 0.9;
-}
-
-.quotapanel-pct-high {
-    color: #e5484d;
-    opacity: 1;
+    font-size: 0.95em;
     font-weight: bold;
+    font-feature-settings: "tnum";
 }
 
-/* Usage bar. Track is a fixed-width rounded box; the fill is a child whose
- * width and background-color are set inline per window in extension.js. */
+.quotapanel-legend {
+    spacing: 4px;
+}
+
+.quotapanel-legend-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 3px;
+}
+
+.quotapanel-legend-sep {
+    font-size: 0.75em;
+    opacity: 0.4;
+}
+
+.quotapanel-legend-text {
+    font-size: 0.75em;
+    opacity: 0.7;
+}
+
 .quotapanel-bar-track {
-    height: 8px;
-    border-radius: 4px;
+    height: 6px;
+    border-radius: 3px;
     background-color: rgba(127, 127, 127, 0.25);
 }
 
 .quotapanel-bar-fill {
-    height: 8px;
-    border-radius: 4px;
+    height: 6px;
+    border-radius: 3px;
+}
+
+.quotapanel-reset-row {
+    spacing: 4px;
+}
+
+.quotapanel-reset-icon {
+    opacity: 0.5;
+    margin-top: 2px;
 }
 
 .quotapanel-reset {
     font-size: 0.8em;
     opacity: 0.6;
+    font-feature-settings: "tnum";
+}
+
+.quotapanel-context-title {
+    font-size: 0.8em;
+    font-weight: bold;
+    opacity: 0.7;
+}
+
+.quotapanel-context-detail {
+    font-size: 0.75em;
+    opacity: 0.5;
+}
+
+.quotapanel-section-title {
+    font-size: 0.8em;
+    font-weight: bold;
+    opacity: 0.7;
+}
+
+.quotapanel-summary-total {
+    font-size: 0.9em;
+    opacity: 0.7;
+    font-feature-settings: "tnum";
+}
+
+.quotapanel-chart-totals {
+    margin-top: 2px;
+}
+
+.quotapanel-status-row {
+    spacing: 6px;
+}
+
+.quotapanel-status-icon {
+    opacity: 0.7;
 }
 
 .quotapanel-note {
-    font-size: 0.9em;
+    font-size: 0.85em;
     opacity: 0.8;
 }
 
 .quotapanel-note-dim {
-    font-size: 0.85em;
-    opacity: 0.6;
+    font-size: 0.8em;
+    opacity: 0.55;
 }
 
 .quotapanel-error {
     font-size: 0.85em;
     color: #e5484d;
-    padding-left: 18px;
+}
+
+/* --- Settings --------------------------------------------------------------- */
+
+.quotapanel-headline {
+    font-weight: bold;
+    font-size: 1.05em;
+}
+
+.quotapanel-settings-grid {
+    spacing: 2px;
+}
+
+.quotapanel-settings-title {
+    font-size: 0.9em;
+    font-weight: bold;
+}
+
+.quotapanel-check-row {
+    border-radius: 6px;
+    padding: 3px 4px;
+}
+
+.quotapanel-check-row:hover, .quotapanel-check-row:focus {
+    background-color: rgba(127, 127, 127, 0.15);
+}
+
+.quotapanel-check-row StBoxLayout {
+    spacing: 6px;
+}
+
+.quotapanel-check-icon {
+    opacity: 0.85;
+}
+
+/* Checked = approved: the symbolic checkbox picks up this green. */
+.quotapanel-check-icon-on {
+    color: #2ec27e;
+    opacity: 1;
+}
+
+.quotapanel-check-label {
+    font-size: 0.9em;
+}
+
+.quotapanel-stepper-row {
+    spacing: 6px;
+    padding: 1px 0;
+}
+
+.quotapanel-detect-row {
+    spacing: 6px;
+    padding: 1px 0;
+}
+
+.quotapanel-detect-ok {
+    font-size: 0.85em;
+    color: #2ec27e;
+}
+
+.quotapanel-text-button {
+    font-size: 0.85em;
+    border-radius: 6px;
+    padding: 2px 8px;
+    background-color: rgba(127, 127, 127, 0.2);
+}
+
+.quotapanel-text-button:hover, .quotapanel-text-button:focus {
+    background-color: rgba(127, 127, 127, 0.3);
 }
