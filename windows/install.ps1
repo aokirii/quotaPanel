@@ -14,6 +14,23 @@ param([switch]$SkipDaemon)
 
 $ErrorActionPreference = 'Stop'
 
+function Import-VcVars($vcvars) {
+    cmd /c "`"$vcvars`" && set" | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+    }
+}
+
+# Swift's linker needs the Windows SDK import libraries (kernel32.lib / ucrt.lib);
+# they only land on $env:LIB once a Windows SDK component is installed. The MSVC
+# toolset (VC.Tools) alone does not provide them.
+function Test-HasWindowsSdk {
+    if (-not $env:LIB) { return $false }
+    foreach ($d in $env:LIB.Split(';')) {
+        if ($d -and (Test-Path (Join-Path $d 'kernel32.lib'))) { return $true }
+    }
+    return $false
+}
+
 $repoRoot   = Split-Path -Parent $PSScriptRoot
 $coreDir    = Join-Path $repoRoot 'linux\QuotaPanelCore'
 $trayCs     = Join-Path $PSScriptRoot 'tray\QuotaPanelTray.cs'
@@ -49,23 +66,23 @@ if (-not $SkipDaemon) {
     }
 
     # Swift on Windows links against the MSVC toolset and the Windows SDK, so the
-    # build needs the Visual Studio developer environment (INCLUDE/LIB/PATH). A
-    # plain shell doesn't have it; import it from vcvars64.bat unless we're
-    # already inside a developer prompt (VCToolsInstallDir is set there).
+    # build needs the Visual Studio developer environment (INCLUDE/LIB/PATH) and a
+    # Windows SDK. Locate VS, import vcvars64.bat unless we're already inside a
+    # developer prompt (VCToolsInstallDir is set there), then make sure the SDK is
+    # actually present before building.
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $vsPath  = $null
+    if (Test-Path $vswhere) {
+        $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath 2>$null | Select-Object -First 1
+    }
+    $vcvars = if ($vsPath) { Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat' } else { $null }
+
     if (-not $env:VCToolsInstallDir) {
-        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-        $vsPath  = $null
-        if (Test-Path $vswhere) {
-            $vsPath = & $vswhere -latest -products * `
-                -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-                -property installationPath 2>$null | Select-Object -First 1
-        }
-        $vcvars = if ($vsPath) { Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat' } else { $null }
         if ($vcvars -and (Test-Path $vcvars)) {
             Write-Host '==> Importing Visual Studio build environment…' -ForegroundColor Cyan
-            cmd /c "`"$vcvars`" && set" | ForEach-Object {
-                if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
-            }
+            Import-VcVars $vcvars
         } else {
             Write-Host 'Visual Studio C++ build tools were not found.' -ForegroundColor Red
             Write-Host 'Install Visual Studio 2022 (or the Build Tools) with the'
@@ -74,6 +91,48 @@ if (-not $SkipDaemon) {
             Write-Host 'then re-run this script. See https://www.swift.org/install/windows/.'
             exit 1
         }
+    }
+
+    # MSVC alone isn't enough: swift build's linker fails with "cannot open input
+    # file 'kernel32.lib' / 'ucrt.lib'" when no Windows SDK is installed (this is
+    # the "Swift build failed" you hit on a machine that only has the compiler).
+    # If it's missing, add it through the VS installer, then re-import so the
+    # freshly installed SDK's LIB/INCLUDE paths take effect — and only then build.
+    if (-not (Test-HasWindowsSdk)) {
+        $setup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
+        if (-not ($vsPath -and (Test-Path $setup))) {
+            Write-Host 'The Windows SDK is missing and cannot be installed automatically.' -ForegroundColor Red
+            Write-Host 'Open the Visual Studio Installer, choose Modify, enable the'
+            Write-Host '"Desktop development with C++" workload, then re-run this script.'
+            exit 1
+        }
+        Write-Host '==> Windows SDK not found — installing it via the Visual Studio installer…' -ForegroundColor Yellow
+        Write-Host '    A UAC prompt will appear; this can take a few minutes.'
+        $sdkArgs = @(
+            'modify', '--installPath', $vsPath,
+            '--add', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+            '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.26100',
+            '--quiet', '--norestart'
+        )
+        try {
+            $proc = Start-Process -FilePath $setup -ArgumentList $sdkArgs -Verb RunAs -Wait -PassThru
+        } catch {
+            Write-Host 'Windows SDK install was cancelled (UAC declined).' -ForegroundColor Red
+            exit 1
+        }
+        # 0 = success, 3010 = success but a reboot is pending; anything else fails.
+        if ($proc.ExitCode -and $proc.ExitCode -ne 3010) {
+            Write-Host "Windows SDK install failed (exit $($proc.ExitCode))." -ForegroundColor Red
+            Write-Host 'Install the "Desktop development with C++" workload manually, then re-run.'
+            exit 1
+        }
+        if ($vcvars -and (Test-Path $vcvars)) { Import-VcVars $vcvars }
+        if (-not (Test-HasWindowsSdk)) {
+            Write-Host 'Windows SDK still not detected after the install.' -ForegroundColor Red
+            Write-Host 'Open "Developer PowerShell for VS 2022" and re-run this script.'
+            exit 1
+        }
+        Write-Host '    Windows SDK installed.' -ForegroundColor Green
     }
 
     Write-Host '==> Building quotapanel-daemon (swift build -c release)…' -ForegroundColor Cyan
