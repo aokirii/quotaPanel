@@ -427,6 +427,25 @@ class QuotaPanelIndicator extends PanelMenu.Button {
         this.add_child(box);
 
         this._buildMenu();
+
+        // Resume a parked dot animation when the menu opens mid-refresh (it
+        // only runs while the dots are mapped; see _animateSpinner).
+        this.menu.connect('open-state-changed', (_menu, open) => {
+            if (open && this._isRefreshing) {
+                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._animateSpinner();
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        });
+
+        this.connect('destroy', () => {
+            this._spinnerActive = false;
+            if (this._refreshTimeoutId) {
+                GLib.source_remove(this._refreshTimeoutId);
+                this._refreshTimeoutId = 0;
+            }
+        });
     }
 
     _buildMenu() {
@@ -669,7 +688,12 @@ class QuotaPanelIndicator extends PanelMenu.Button {
     }
 
     _animateSpinner() {
-        if (!this._spinnerActive)
+        // ease() on an actor that is not on screen completes SYNCHRONOUSLY,
+        // which turned this chain into unbounded recursion ("too much
+        // recursion") whenever the auto-refresh fired with the menu closed.
+        // Only animate while the dots are mapped; the menu-open handler
+        // resumes a parked animation.
+        if (!this._spinnerActive || !this._refreshSpinner.mapped)
             return;
         this._spinnerDots.forEach((dot, i) => {
             dot.ease({
@@ -683,9 +707,15 @@ class QuotaPanelIndicator extends PanelMenu.Button {
                         duration: 180,
                         mode: Clutter.AnimationMode.EASE_IN_QUAD,
                         onComplete: () => {
-                            // The last dot landing starts the next wave.
-                            if (i === this._spinnerDots.length - 1)
-                                this._animateSpinner();
+                            // The last dot landing starts the next wave —
+                            // re-armed from the main loop, never by direct
+                            // recursion, so the stack can't overflow.
+                            if (i === this._spinnerDots.length - 1) {
+                                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                                    this._animateSpinner();
+                                    return GLib.SOURCE_REMOVE;
+                                });
+                            }
                         },
                     });
                 },
@@ -1119,32 +1149,55 @@ class QuotaPanelIndicator extends PanelMenu.Button {
     _refreshNow() {
         if (!this._daemonPath || this._isRefreshing)
             return;
-        this._isRefreshing = true;
-        this._renderHeader();
+        // Spawn first, update the UI after — a rendering exception must never
+        // be able to leave _isRefreshing stuck with no process running.
+        let proc;
         try {
-            const proc = Gio.Subprocess.new(
+            proc = Gio.Subprocess.new(
                 [this._daemonPath, '--once'],
                 Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
-            proc.wait_async(null, () => {
-                this._isRefreshing = false;
-                if (this._onRefreshDone)
-                    this._onRefreshDone();
-                else
-                    this._renderHeader();
-            });
         } catch (e) {
-            this._isRefreshing = false;
             logError(e, 'QuotaPanel: failed to spawn daemon');
+            return;
         }
+        this._isRefreshing = true;
+
+        // Watchdog: if the daemon ever wedges (hung network, …), kill it so
+        // the button and the busy state always recover.
+        this._refreshTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 90, () => {
+            this._refreshTimeoutId = 0;
+            proc.force_exit();
+            return GLib.SOURCE_REMOVE;
+        });
+
+        proc.wait_async(null, (p, res) => {
+            try {
+                p.wait_finish(res);
+            } catch {}
+            if (this._refreshTimeoutId) {
+                GLib.source_remove(this._refreshTimeoutId);
+                this._refreshTimeoutId = 0;
+            }
+            this._isRefreshing = false;
+            if (this._onRefreshDone)
+                this._onRefreshDone();
+            else
+                this._renderHeader();
+        });
+        this._renderHeader();
     }
 });
 
 export default class QuotaPanelExtension extends Extension {
     enable() {
         this._statusPath = GLib.build_filenamev([configDir(), 'status.json']);
+        this._notifyStatePath = GLib.build_filenamev([configDir(), 'notify-state.json']);
         this._daemonPath = findDaemon();
         this._config = new Config();
-        this._notified = null;   // percent state per provider:window for threshold alerts
+        // Thresholds already alerted, per provider:window — persisted so a
+        // shell reload or a lock/unlock cycle (both re-enable the extension)
+        // can't swallow a crossing.
+        this._marks = this._loadNotifyState();
 
         this._indicator = new QuotaPanelIndicator(this);
         this._indicator._onRefreshDone = () => this._scheduleReload(50);
@@ -1194,7 +1247,7 @@ export default class QuotaPanelExtension extends Extension {
             this._indicator = null;
         }
         this._config = null;
-        this._notified = null;
+        this._marks = null;
     }
 
     _restartAutoRefresh() {
@@ -1240,31 +1293,56 @@ export default class QuotaPanelExtension extends Extension {
         this._indicator.render(status);
     }
 
-    // Notify when a window's usage crosses a configured threshold upward.
-    // The first status after enable only seeds the state (no alert storm).
+    // One alert per threshold per window cycle, mark-based: a window at or
+    // above an un-marked threshold alerts, no matter when the crossing
+    // actually happened (so nothing is lost while the extension is disabled,
+    // the shell reloads, or the screen is locked). Dropping 2+ points below
+    // a threshold clears its mark, arming the next cycle.
     _checkThresholds(status) {
         const thresholds = this._config.alertThresholds;
-        const current = new Map();
+        const marks = {};
         for (const p of status.providers ?? []) {
             if (p.status !== 'ok')
                 continue;
-            for (const w of p.windows ?? [])
-                current.set(`${p.id}:${w.label}`, {percent: w.percent, provider: p.name, window: w.label});
-        }
-        if (this._notified !== null && thresholds.length > 0) {
-            for (const [key, now] of current) {
-                const before = this._notified.get(key);
-                if (before === undefined)
-                    continue;
+            for (const w of p.windows ?? []) {
+                const key = `${p.id}:${w.label}`;
+                const prev = new Set(this._marks?.[key] ?? []);
+                const cur = [];
                 for (const t of thresholds) {
-                    if (before < t && now.percent >= t) {
-                        Main.notify('QuotaPanel',
-                            `${now.provider} — ${now.window} reached ${Math.round(t)}% (now ${formatPercent(now.percent)}%)`);
-                        break;
+                    if (w.percent >= t) {
+                        cur.push(t);
+                        if (!prev.has(t)) {
+                            Main.notify('QuotaPanel',
+                                `${p.name} — ${w.label} reached ${Math.round(t)}% (now ${formatPercent(w.percent)}%)`);
+                        }
+                    } else if (w.percent >= t - 2 && prev.has(t)) {
+                        cur.push(t);   // hysteresis band: keep the mark, no re-alert
                     }
                 }
+                if (cur.length)
+                    marks[key] = cur;
             }
         }
-        this._notified = new Map([...current].map(([k, v]) => [k, v.percent]));
+        if (JSON.stringify(marks) !== JSON.stringify(this._marks)) {
+            this._marks = marks;
+            this._saveNotifyState();
+        }
+    }
+
+    _loadNotifyState() {
+        try {
+            const [ok, contents] = GLib.file_get_contents(this._notifyStatePath);
+            if (ok)
+                return JSON.parse(new TextDecoder().decode(contents)) ?? {};
+        } catch {}
+        return {};
+    }
+
+    _saveNotifyState() {
+        try {
+            GLib.file_set_contents(this._notifyStatePath, JSON.stringify(this._marks));
+        } catch (e) {
+            logError(e, 'QuotaPanel: failed to save notify-state.json');
+        }
     }
 }
