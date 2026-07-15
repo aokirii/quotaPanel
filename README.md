@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File windows\install.ps1
 
 The script imports the Visual Studio build environment (installing the Windows SDK component first if it's missing), builds the same portable Swift daemon the Linux port uses, compiles the tray app with the in-box C# compiler, installs both (plus the provider icons) under `%LOCALAPPDATA%\QuotaPanel`, creates Desktop and Start Menu shortcuts, and starts it.
 
-QuotaPanel is a **system-tray app**, not a windowed one: it has no window of its own — after install its icon appears in the system tray (bottom-right, next to the clock; click the `^` arrow if Windows hides it). Click that icon to open the panel. To launch it again after quitting, **double-click the QuotaPanel shortcut on your Desktop** or find it in the Start menu. Right-click the tray icon to enable *Start with Windows* (auto-launch at login). In-app sign-in (Settings → Accounts) works with no configuration for Gemini, Codex, and Copilot — their public client ids are bundled. Claude is the exception (its client id isn't bundled) and Antigravity reads its own credentials; see [OAuth client configuration](#oauth-client-configuration) below. And if you already use these tools' own CLIs, QuotaPanel reads their credentials automatically — no sign-in needed at all.
+QuotaPanel is a **system-tray app**, not a windowed one: it has no window of its own — after install its icon appears in the system tray (bottom-right, next to the clock; click the `^` arrow if Windows hides it). Click that icon to open the panel. To launch it again after quitting, **double-click the QuotaPanel shortcut on your Desktop** or find it in the Start menu. Right-click the tray icon to enable *Start with Windows* (auto-launch at login). In-app sign-in (Settings → Accounts) works with no extra setup for Gemini, Codex, and Copilot — `install.ps1` writes their public client ids to `%APPDATA%\quotapanel\oauth-clients.json`. Claude is the exception (add it yourself) and Antigravity reads its own credentials; see [OAuth client configuration](#oauth-client-configuration) below. And if you already use these tools' own CLIs, QuotaPanel reads their credentials automatically — no sign-in needed at all.
 
 > **Status:** builds and runs on Windows 11. The Windows tray is newer than the macOS and Linux front-ends, so if you hit a rough edge please open an issue.
 
@@ -107,31 +107,31 @@ QuotaPanel reads your usage two ways:
 
 ### What needs configuring
 
-The in-app sign-in needs an OAuth **client id** (the app-level credential that identifies "QuotaPanel acting as that CLI" to the provider — separate from *your* tokens, which land in `credentials.json` automatically when you sign in). QuotaPanel bundles the public client ids that the upstream CLIs publish in their own open-source code — the same values [CodexBar](https://github.com/steipete/CodexBar) hardcodes — so most providers work with **no configuration**:
+The in-app sign-in needs an OAuth **client id** — the app-level credential that identifies "QuotaPanel acting as that CLI" to the provider (separate from *your* tokens, which land in `credentials.json` automatically when you sign in). **The app embeds none of these**; they come from `oauth-clients.json` in the per-platform config directory:
 
-| Provider | In-app sign-in works out of the box? | Notes |
+| Platform | Config directory | How the file gets there |
 | --- | --- | --- |
-| `gemini` | ✅ bundled | gemini-cli's public Google client |
-| `codex` | ✅ bundled | codex CLI's client |
-| `copilot` | ✅ bundled | the GitHub OAuth app the Copilot plugins use |
-| `antigravity` | ✅ auto | client id/secret read from Antigravity's own credential file |
-| `claude` | ⚠️ needs config | **not** bundled — supply it yourself (see below) |
+| Windows | `%APPDATA%\quotapanel\` | `install.ps1` writes it (Gemini/Codex/Copilot) automatically |
+| macOS | `~/.quotapanel/` | copy [`oauth-clients.sample.json`](oauth-clients.sample.json) and fill it in |
+| Linux | `~/.config/quotapanel/` | copy [`oauth-clients.sample.json`](oauth-clients.sample.json) and fill it in |
 
-**Claude is intentionally not bundled:** Anthropic restricts Claude Code's OAuth to Claude Code / Claude.ai, so QuotaPanel doesn't ship its client id. To use in-app Claude sign-in anyway, put a `claude` entry in `oauth-clients.json` (below). Or just rely on path (1) — if Claude Code is installed, QuotaPanel reads its credentials automatically.
+So on Windows, Gemini/Codex/Copilot sign-in works right after `install.ps1`. On macOS/Linux you supply the file yourself (or just use path (1) — if you already sign into these tools' CLIs, QuotaPanel reads those credentials with no file at all).
 
-### Overriding or adding client ids (`oauth-clients.json`)
+Per provider:
 
-To override a bundled value, or to supply Claude's, copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to `<config-dir>/oauth-clients.json` and fill in the entries you need. It lives in the per-platform config directory (same JSON on every platform — only the directory differs):
+| Provider | Fields | Value comes from |
+| --- | --- | --- |
+| `gemini` | `clientId` + `clientSecret` | gemini-cli's public Google OAuth client |
+| `codex` | `clientId` | codex CLI's OAuth client |
+| `copilot` | `clientId` | the GitHub OAuth app the Copilot plugins use |
+| `claude` | `clientId` | Claude Code's OAuth client — **you must supply this** (not written by any installer) |
+| `antigravity` | — | read from Antigravity's own credential file; no entry needed |
 
-| Platform | Config directory |
-| --- | --- |
-| macOS | `~/.quotapanel/` |
-| Linux | `~/.config/quotapanel/` |
-| Windows | `%APPDATA%\quotapanel\` |
+**Claude is deliberately never written for you:** Anthropic restricts Claude Code's OAuth to Claude Code / Claude.ai. To use in-app Claude sign-in, add a `claude` entry yourself — or just rely on path (1), which reads Claude Code's own credentials when it's installed.
 
-Precedence is **environment variable → `oauth-clients.json` → bundled default**, so `QUOTAPANEL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` or a file entry always wins. Changes take effect on the next *Sign in* — no restart.
+Precedence is **environment variable → `oauth-clients.json`**, so `QUOTAPANEL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` overrides the file. Changes take effect on the next *Sign in* — no restart.
 
-> **Terms of service:** these bundled client credentials belong to the upstream vendors, and using them in a third-party tool can be against a provider's terms (Anthropic, OpenAI and others restrict them to their own official clients) — which may put your account at risk. This is why Claude is left out and why the safest path is (1), reusing a CLI you already sign into. The bundled defaults mirror what CodexBar ships; that is precedent, not vendor endorsement.
+> **Terms of service:** these client credentials belong to the upstream vendors, and using them in a third-party tool can be against a provider's terms (Anthropic, OpenAI and others restrict them to their own official clients) — which may put your account at risk. The safest path is (1), reusing a CLI you already sign into. Nothing is embedded in the app or shipped enabled by default.
 
 ## License
 

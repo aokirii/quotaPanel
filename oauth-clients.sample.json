@@ -1,5 +1,5 @@
 {
-  "_comment": "OPTIONAL. Gemini, Codex and Copilot client ids are already bundled in the app, so you only need this file to (a) sign into Claude in-app (its id is not bundled) or (b) override a bundled id with your own. Copy it to ~/.quotapanel/oauth-clients.json (macOS), ~/.config/quotapanel/oauth-clients.json (Linux), or %APPDATA%\\quotapanel\\oauth-clients.json (Windows) and keep only the entries you need. Precedence: env var > this file > bundled default. See README -> 'OAuth client configuration'. Git-ignored; never commit the filled-in copy.",
+  "_comment": "The app embeds no client ids; in-app sign-in reads them from this file. On Windows install.ps1 writes it for you (Gemini/Codex/Copilot). On macOS/Linux copy this file to ~/.quotapanel/oauth-clients.json (macOS) or ~/.config/quotapanel/oauth-clients.json (Linux) and fill in the entries you want; add a 'claude' entry for in-app Claude sign-in. Keep only the entries you need. Precedence: env var > this file. Git-ignored; never commit the filled-in copy.",
   "gemini": {
     "clientId": "PASTE_GEMINI_CLI_OAUTH_CLIENT_ID.apps.googleusercontent.com",
     "clientSecret": "PASTE_GEMINI_CLI_OAUTH_CLIENT_SECRET"

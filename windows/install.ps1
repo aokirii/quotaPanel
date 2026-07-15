@@ -206,12 +206,12 @@ foreach ($lnk in @(
 
 # --- 5. Default OAuth client ids (in-app sign-in with no manual setup) --------
 # Gemini / Codex / Copilot public client ids (the ones the upstream CLIs
-# publish; the tray also bundles them in code). Writing them to
-# oauth-clients.json makes in-app sign-in work regardless of build state and
-# gives you a file you can inspect/edit. Claude is intentionally left out
-# (Anthropic restricts its OAuth to Claude Code / Claude.ai). Any existing
-# entries — a claude entry, your own overrides — are preserved; only missing or
-# PASTE_ placeholder ones are filled. Wrapped so a failure never aborts install.
+# publish). The app itself embeds nothing — writing them here, to a local file
+# outside the app, is what makes in-app sign-in work out of the box, and gives
+# you a file you can inspect/edit. Claude is intentionally left out (Anthropic
+# restricts its OAuth to Claude Code / Claude.ai). Any existing entries — a
+# claude entry, your own overrides — are preserved; only missing or PASTE_
+# placeholder ones are filled. Wrapped so a failure never aborts install.
 $oauthFile = Join-Path $configDir 'oauth-clients.json'
 try {
     $config = [ordered]@{}
