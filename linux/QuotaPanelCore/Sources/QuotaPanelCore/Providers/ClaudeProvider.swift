@@ -29,9 +29,15 @@ enum ClaudeProvider {
         }
     }
 
-    /// Read the CLI's OAuth blob from `~/.claude/.credentials.json`.
+    /// Read the CLI's OAuth blob from Claude Code's credentials file:
+    /// `$CLAUDE_CONFIG_DIR/.credentials.json` if that env var is set (Claude
+    /// Code lets users relocate its config dir), otherwise
+    /// `~/.claude/.credentials.json` — the default on Windows
+    /// (`%USERPROFILE%\.claude\`), Linux, and macOS's file layout.
     static func loadCredentials() -> Credentials? {
-        let url = URL(fileURLWithPath: "\(Paths.home)/.claude/.credentials.json")
+        let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "\(Paths.home)/.claude"
+        let url = URL(fileURLWithPath: "\(configDir)/.credentials.json")
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = root["claudeAiOauth"] as? [String: Any],

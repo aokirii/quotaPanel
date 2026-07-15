@@ -3777,7 +3777,14 @@ namespace QuotaPanel
             var home = CredStore.Home;
             var via = "Using the " + id + " CLI's sign-in";
             var candidates = new List<string>();
-            if (id == "claude") candidates.Add(Path.Combine(home, ".claude", ".credentials.json"));
+            if (id == "claude")
+            {
+                // Honor CLAUDE_CONFIG_DIR (Claude Code lets users relocate its
+                // config dir); otherwise the default %USERPROFILE%\.claude.
+                var claudeDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+                if (string.IsNullOrEmpty(claudeDir)) claudeDir = Path.Combine(home, ".claude");
+                candidates.Add(Path.Combine(claudeDir, ".credentials.json"));
+            }
             else if (id == "codex") candidates.Add(Path.Combine(home, ".codex", "auth.json"));
             else if (id == "gemini") candidates.Add(Path.Combine(home, ".gemini", "oauth_creds.json"));
             else if (id == "copilot")

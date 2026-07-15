@@ -7,7 +7,8 @@ import Security
 /// 1. The `/usr/bin/security` CLI — it has a stable code identity, so one
 ///    "Always Allow" survives rebuilds without re-prompting.
 /// 2. The Keychain API directly (SecItemCopyMatching).
-/// 3. The `~/.claude/.credentials.json` file (Linux/legacy layout).
+/// 3. The credentials file — `$CLAUDE_CONFIG_DIR/.credentials.json` if that env
+///    var is set, otherwise `~/.claude/.credentials.json` (Linux/legacy layout).
 enum KeychainReader {
     static let claudeService = "Claude Code-credentials"
 
@@ -18,9 +19,13 @@ enum KeychainReader {
         if let data = readViaAPI(service: claudeService), !data.isEmpty {
             return data
         }
-        let fileURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/.credentials.json")
-        return try? Data(contentsOf: fileURL)
+        // Honor CLAUDE_CONFIG_DIR (Claude Code lets users relocate its config
+        // dir); fall back to the default ~/.claude layout.
+        let env = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+        let configDir = (env?.isEmpty == false)
+            ? URL(fileURLWithPath: env!)
+            : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        return try? Data(contentsOf: configDir.appendingPathComponent(".credentials.json"))
     }
 
     private static func readViaSecurityCLI(service: String) -> Data? {
