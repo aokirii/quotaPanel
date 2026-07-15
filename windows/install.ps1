@@ -3,8 +3,9 @@
 # Builds the shared Swift daemon (linux/QuotaPanelCore — the "linux" folder
 # holds the portable core, which also compiles on Windows), compiles the tray
 # app with the C# compiler Windows ships in-box, installs both under
-# %LOCALAPPDATA%\QuotaPanel, creates Desktop + Start Menu shortcuts, fetches
-# first data, and starts the tray.
+# %LOCALAPPDATA%\QuotaPanel, creates Desktop + Start Menu shortcuts, writes the
+# default OAuth client ids so in-app sign-in works out of the box, fetches first
+# data, and starts the tray.
 #
 # Usage (from the repo):
 #   powershell -ExecutionPolicy Bypass -File windows\install.ps1
@@ -203,7 +204,51 @@ foreach ($lnk in @(
     }
 }
 
-# --- 5. First data + launch ----------------------------------------------------
+# --- 5. Default OAuth client ids (in-app sign-in with no manual setup) --------
+# Gemini / Codex / Copilot public client ids (the ones the upstream CLIs
+# publish; the tray also bundles them in code). Writing them to
+# oauth-clients.json makes in-app sign-in work regardless of build state and
+# gives you a file you can inspect/edit. Claude is intentionally left out
+# (Anthropic restricts its OAuth to Claude Code / Claude.ai). Any existing
+# entries — a claude entry, your own overrides — are preserved; only missing or
+# PASTE_ placeholder ones are filled. Wrapped so a failure never aborts install.
+$oauthFile = Join-Path $configDir 'oauth-clients.json'
+try {
+    $config = [ordered]@{}
+    if (Test-Path $oauthFile) {
+        try {
+            (Get-Content -Raw -Path $oauthFile | ConvertFrom-Json).PSObject.Properties |
+                ForEach-Object { $config[$_.Name] = $_.Value }
+        } catch {
+            Write-Host '    existing oauth-clients.json was unreadable - rewriting it' -ForegroundColor Yellow
+        }
+    }
+    $defaults = [ordered]@{
+        gemini  = [ordered]@{
+            clientId     = '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com'
+            clientSecret = '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'
+        }
+        codex   = [ordered]@{ clientId = 'app_EMoamEEZ73f0CkXaXp7hrann' }
+        copilot = [ordered]@{ clientId = 'Iv1.b507a08c87ecfe98' }
+    }
+    foreach ($name in $defaults.Keys) {
+        $cur = $config[$name]
+        $needs = -not $cur
+        if ($cur) {
+            foreach ($field in $defaults[$name].Keys) {
+                $v = [string]$cur.$field
+                if ([string]::IsNullOrEmpty($v) -or $v.StartsWith('PASTE_')) { $needs = $true; break }
+            }
+        }
+        if ($needs) { $config[$name] = $defaults[$name] }
+    }
+    ($config | ConvertTo-Json -Depth 5) | Set-Content -Path $oauthFile -Encoding UTF8
+    Write-Host "==> Wrote default client ids to $oauthFile" -ForegroundColor Cyan
+} catch {
+    Write-Host "    could not write $oauthFile ($($_.Exception.Message))" -ForegroundColor Yellow
+}
+
+# --- 6. First data + launch ----------------------------------------------------
 
 $daemon = Join-Path $installDir 'quotapanel-daemon.exe'
 if (Test-Path $daemon) {
@@ -221,6 +266,7 @@ Write-Host '    next to the clock; click the ^ arrow if hidden). Click the icon 
 Write-Host '  - To launch it again later: double-click the QuotaPanel icon on your Desktop'
 Write-Host '    or find QuotaPanel in the Start menu.'
 Write-Host '  - Start with Windows (auto-launch at login): right-click the tray icon and enable it.'
-Write-Host "  - OAuth clients (Gemini/Codex/Copilot/Antigravity sign-in & refresh): copy"
-Write-Host "    oauth-clients.sample.json to $configDir\oauth-clients.json and fill it in (see README)."
+Write-Host '  - In-app sign-in for Gemini, Codex and Copilot works out of the box - their client'
+Write-Host "    ids were written to $configDir\oauth-clients.json. Add a 'claude' entry there for"
+Write-Host '    Claude in-app sign-in (see README); Antigravity reads its own credentials.'
 Write-Host "  - Config and status live in $configDir"
