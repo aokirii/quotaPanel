@@ -1140,19 +1140,41 @@ namespace QuotaPanel
 
         static string Value(string key, string field, string envSuffix)
         {
+            // Precedence: env var -> oauth-clients.json -> bundled default.
             var env = Environment.GetEnvironmentVariable("QUOTAPANEL_" + key.ToUpperInvariant() + envSuffix);
             if (!string.IsNullOrEmpty(env)) return env;
             try
             {
                 var path = Path.Combine(Config.Dir, "oauth-clients.json");
-                if (!File.Exists(path)) return "";
-                var ser = new JavaScriptSerializer();
-                var root = J.Dict(ser.DeserializeObject(File.ReadAllText(path)));
-                var entry = J.Dict(J.Get(root, key));
-                var value = J.Str(entry, field, "");
-                return value.StartsWith("PASTE_") ? "" : value;
+                if (File.Exists(path))
+                {
+                    var ser = new JavaScriptSerializer();
+                    var root = J.Dict(ser.DeserializeObject(File.ReadAllText(path)));
+                    var entry = J.Dict(J.Get(root, key));
+                    var value = J.Str(entry, field, "");
+                    if (value.Length > 0 && !value.StartsWith("PASTE_")) return value;
+                }
             }
-            catch (Exception) { return ""; }
+            catch (Exception) { }
+            return BuiltinDefault(key, field);
+        }
+
+        // Public client ids the upstream CLIs publish in their own open-source
+        // code — the same values CodexBar hardcodes. oauth-clients.json / env
+        // vars override these. Claude is intentionally not bundled (Anthropic
+        // restricts its OAuth to Claude Code / Claude.ai); Antigravity's come
+        // from its own credential file.
+        static string BuiltinDefault(string key, string field)
+        {
+            if (key == "gemini" && field == "clientId")
+                return "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+            if (key == "gemini" && field == "clientSecret")
+                return "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";
+            if (key == "codex" && field == "clientId")
+                return "app_EMoamEEZ73f0CkXaXp7hrann";
+            if (key == "copilot" && field == "clientId")
+                return "Iv1.b507a08c87ecfe98";
+            return "";
         }
 
         public static string MissingHint(string provider)
