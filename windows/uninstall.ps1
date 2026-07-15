@@ -29,6 +29,10 @@ $runKey     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $coreBuild  = if ($PSScriptRoot) {
     Join-Path (Split-Path -Parent $PSScriptRoot) 'linux\QuotaPanelCore\.build'
 } else { $null }
+$shortcuts  = @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop'))  'QuotaPanel.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('Programs')) 'QuotaPanel.lnk')
+)
 
 Write-Host '==> QuotaPanel uninstall' -ForegroundColor Cyan
 
@@ -37,6 +41,7 @@ Write-Host '==> QuotaPanel uninstall' -ForegroundColor Cyan
 $paths = @($installDir, $configDir)
 if ($coreBuild) { $paths += $coreBuild }
 if (-not $KeepCredentials) { $paths += $credsDir }
+$paths += $shortcuts
 $found = @($paths | Where-Object { Test-Path $_ })
 
 $autostart = $false

@@ -3,7 +3,8 @@
 # Builds the shared Swift daemon (linux/QuotaPanelCore — the "linux" folder
 # holds the portable core, which also compiles on Windows), compiles the tray
 # app with the C# compiler Windows ships in-box, installs both under
-# %LOCALAPPDATA%\QuotaPanel, fetches first data, and starts the tray.
+# %LOCALAPPDATA%\QuotaPanel, creates Desktop + Start Menu shortcuts, fetches
+# first data, and starts the tray.
 #
 # Usage (from the repo):
 #   powershell -ExecutionPolicy Bypass -File windows\install.ps1
@@ -177,7 +178,32 @@ $trayExe = Join-Path $installDir 'QuotaPanelTray.exe'
 if ($LASTEXITCODE -ne 0) { Write-Host 'C# compile failed.' -ForegroundColor Red; exit 1 }
 Write-Host "    installed $trayExe"
 
-# --- 3. First data + launch ----------------------------------------------------
+# --- 4. Desktop + Start Menu shortcuts ---------------------------------------
+# QuotaPanel is a system-tray app (no window — it lives next to the clock), and
+# the exe is buried under %LOCALAPPDATA%. These shortcuts let you launch it like
+# any normal app: double-click the Desktop icon or find it in the Start menu.
+# Launching again while it's already running is harmless — the single-instance
+# mutex makes the second copy exit immediately.
+Write-Host '==> Creating Desktop and Start Menu shortcuts…' -ForegroundColor Cyan
+$shell = New-Object -ComObject WScript.Shell
+foreach ($lnk in @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop'))  'QuotaPanel.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('Programs')) 'QuotaPanel.lnk')
+)) {
+    try {
+        $sc = $shell.CreateShortcut($lnk)
+        $sc.TargetPath       = $trayExe
+        $sc.WorkingDirectory = $installDir
+        $sc.IconLocation     = $trayExe
+        $sc.Description       = 'QuotaPanel - AI usage quotas in the system tray'
+        $sc.Save()
+        Write-Host "    $lnk"
+    } catch {
+        Write-Host "    could not create $lnk ($($_.Exception.Message))" -ForegroundColor Yellow
+    }
+}
+
+# --- 5. First data + launch ----------------------------------------------------
 
 $daemon = Join-Path $installDir 'quotapanel-daemon.exe'
 if (Test-Path $daemon) {
@@ -190,7 +216,11 @@ Write-Host ''
 Write-Host '==> Done. QuotaPanel is running in the system tray.' -ForegroundColor Green
 Write-Host ''
 Write-Host 'Notes:'
-Write-Host "  - OAuth clients (Gemini/Codex refresh): copy oauth-clients.sample.json to"
-Write-Host "    $configDir\oauth-clients.json and fill in the values (see README)."
-Write-Host '  - Start with Windows: right-click the tray icon and enable it there.'
+Write-Host '  - QuotaPanel has no window - look for its icon in the system tray (bottom-right,'
+Write-Host '    next to the clock; click the ^ arrow if hidden). Click the icon to open the panel.'
+Write-Host '  - To launch it again later: double-click the QuotaPanel icon on your Desktop'
+Write-Host '    or find QuotaPanel in the Start menu.'
+Write-Host '  - Start with Windows (auto-launch at login): right-click the tray icon and enable it.'
+Write-Host "  - OAuth clients (Gemini/Codex/Copilot/Antigravity sign-in & refresh): copy"
+Write-Host "    oauth-clients.sample.json to $configDir\oauth-clients.json and fill it in (see README)."
 Write-Host "  - Config and status live in $configDir"

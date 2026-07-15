@@ -8,6 +8,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Preflight: the Command Line Tools provide swiftc (and git). Without them the
+# build dies with a cryptic "swiftc: command not found" / missing-SDK error, so
+# fail fast with the one command that fixes it.
+if ! xcode-select -p >/dev/null 2>&1 || ! command -v swiftc >/dev/null 2>&1; then
+    echo "error: the Xcode Command Line Tools are not installed." >&2
+    echo "       Run:  xcode-select --install" >&2
+    echo "       Click Install in the dialog, wait for it to finish, then re-run ./build.sh." >&2
+    exit 1
+fi
+
 APP=build/QuotaPanel.app
 BIN="$APP/Contents/MacOS/QuotaPanel"
 

@@ -505,12 +505,22 @@ enum CallbackServer {
         }
 
         let box = ResultBox(listener: listener)
-        return try await withCheckedThrowingContinuation { continuation in
-            box.continuation = continuation
+        // withTaskCancellationHandler lets a cancelled sign-in (the user hit
+        // Cancel, or the enclosing Task was cancelled) tear the listener down
+        // immediately and free the port, instead of hanging until timeoutSeconds.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                box.continuation = continuation
 
-            listener.stateUpdateHandler = { state in
-                if case .failed = state { box.finish(.failure(OAuthError.portBusy)) }
-            }
+                // Already cancelled before we started listening.
+                if Task.isCancelled {
+                    box.finish(.failure(CancellationError()))
+                    return
+                }
+
+                listener.stateUpdateHandler = { state in
+                    if case .failed = state { box.finish(.failure(OAuthError.portBusy)) }
+                }
             listener.newConnectionHandler = { connection in
                 connection.start(queue: .global())
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, _ in
@@ -542,6 +552,9 @@ enum CallbackServer {
             DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) {
                 box.finish(.failure(OAuthError.timeout))
             }
+            }
+        } onCancel: {
+            box.finish(.failure(CancellationError()))
         }
     }
 

@@ -33,9 +33,12 @@ struct SettingsView: View {
                     }
                 } else if auth.waiting.contains(provider) {
                     ProgressView().controlSize(.small)
+                    Button("Cancel") { auth.cancelBrowserLogin(provider) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                 } else {
                     Button("Sign in") {
-                        Task { await auth.beginBrowserLogin(provider) }
+                        auth.startBrowserLogin(provider)
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)

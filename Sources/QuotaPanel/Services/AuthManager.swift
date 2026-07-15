@@ -17,6 +17,10 @@ final class AuthManager {
     var busy: Provider?
     var errorMessage: [Provider: String] = [:]
 
+    /// In-flight browser sign-ins, kept so the user can cancel one (e.g. after
+    /// closing the browser tab) instead of waiting out the callback timeout.
+    private var loginTasks: [Provider: Task<Void, Never>] = [:]
+
     /// Refreshes panel data after sign-in/out (wired up by AppState)
     var onCredentialsChanged: (() async -> Void)?
 
@@ -57,6 +61,25 @@ final class AuthManager {
 
     // MARK: - Browser flows (Codex, Gemini, Antigravity, Copilot)
 
+    /// Starts (or restarts) the browser sign-in for `provider`, keeping the
+    /// task handle so `cancelBrowserLogin` can abort it.
+    func startBrowserLogin(_ provider: Provider) {
+        loginTasks[provider]?.cancel()
+        loginTasks[provider] = Task { await beginBrowserLogin(provider) }
+    }
+
+    /// Aborts an in-flight browser sign-in and clears its waiting state — tears
+    /// down the loopback listener / stops the device-code poll so the row goes
+    /// straight back to "Sign in" and the callback port frees up for a retry.
+    func cancelBrowserLogin(_ provider: Provider) {
+        loginTasks[provider]?.cancel()
+        loginTasks[provider] = nil
+        waiting.remove(provider)
+        copilotUserCode = nil
+        busy = nil
+        errorMessage[provider] = nil
+    }
+
     /// Runs the browser-based sign-in for `provider`: Codex via its localhost
     /// callback, Gemini/Antigravity via the Google loopback flow, Copilot via
     /// the GitHub device flow.
@@ -67,6 +90,7 @@ final class AuthManager {
         defer {
             waiting.remove(provider)
             busy = nil
+            loginTasks[provider] = nil
         }
         do {
             let credentials: StoredCredentials
@@ -98,8 +122,14 @@ final class AuthManager {
             }
             CredentialStore.save(credentials, for: provider)
             await onCredentialsChanged?()
+        } catch is CancellationError {
+            // User cancelled (or closed the browser and hit Cancel) — no error.
         } catch {
-            errorMessage[provider] = error.localizedDescription
+            // A cancel can also surface as the callback server's own error;
+            // don't flash a message when we're already tearing down.
+            if !Task.isCancelled {
+                errorMessage[provider] = error.localizedDescription
+            }
         }
     }
 
