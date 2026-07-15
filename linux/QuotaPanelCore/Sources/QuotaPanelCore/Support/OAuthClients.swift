@@ -13,8 +13,11 @@ import Foundation
 /// Expected file shape:
 /// ```json
 /// {
-///   "gemini": { "clientId": "…", "clientSecret": "…" },
-///   "codex":  { "clientId": "…" }
+///   "gemini":      { "clientId": "…", "clientSecret": "…" },
+///   "codex":       { "clientId": "…" },
+///   "claude":      { "clientId": "…" },
+///   "copilot":     { "clientId": "…" },
+///   "antigravity": { "clientId": "…", "clientSecret": "…" }
 /// }
 /// ```
 enum OAuthClients {
@@ -48,4 +51,6 @@ enum OAuthClients {
     static var gemini: Client { client("gemini") }
     static var codex: Client { client("codex") }
     static var claude: Client { client("claude") }
+    static var copilot: Client { client("copilot") }
+    static var antigravity: Client { client("antigravity") }
 }

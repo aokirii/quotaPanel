@@ -10,8 +10,12 @@ enum AntigravityProvider {
     private static let quotaURL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!
 
     static func fetch() async -> ProviderSnapshot {
+        // In-app sign-in (Settings → Accounts) takes priority over the local file
+        if let stored = CredentialStore.load(.antigravity) {
+            return await fetchWithStored(stored)
+        }
         guard var creds = loadCreds() else {
-            return snapshot(.authProblem("Antigravity Google auth not found — sign in with Antigravity"))
+            return snapshot(.authProblem("Antigravity Google auth not found — sign in from Settings or with Antigravity"))
         }
         let expired = creds.accessToken == nil || (creds.expiryMs ?? 0) < Date().timeIntervalSince1970 * 1000
         if expired {
@@ -34,6 +38,23 @@ enum AntigravityProvider {
         }
         let resolved = await loadCodeAssist(token: token, project: creds.projectID)
         return await fetchQuota(token: token, project: resolved.project ?? creds.projectID, plan: resolved.plan)
+    }
+
+    // MARK: - In-app credentials
+
+    /// QuotaPanel's own sign-in: refresh through the Antigravity client from
+    /// oauth-clients.json and persist renewed tokens back to the store.
+    private static func fetchWithStored(_ credentials: StoredCredentials) async -> ProviderSnapshot {
+        var stored = credentials
+        if stored.isExpired {
+            guard let renewed = await GoogleAuth.refresh(stored, client: OAuthClients.antigravity) else {
+                return snapshot(.authProblem("Antigravity token refresh failed — sign in again from Settings"))
+            }
+            stored = renewed
+            CredentialStore.save(stored, for: .antigravity)
+        }
+        let resolved = await loadCodeAssist(token: stored.accessToken, project: nil)
+        return await fetchQuota(token: stored.accessToken, project: resolved.project, plan: resolved.plan)
     }
 
     // MARK: - Local credentials

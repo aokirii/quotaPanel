@@ -1130,7 +1130,17 @@ namespace QuotaPanel
     {
         public static string ClientId(string key)
         {
-            var env = Environment.GetEnvironmentVariable("QUOTAPANEL_" + key.ToUpperInvariant() + "_CLIENT_ID");
+            return Value(key, "clientId", "_CLIENT_ID");
+        }
+
+        public static string ClientSecret(string key)
+        {
+            return Value(key, "clientSecret", "_CLIENT_SECRET");
+        }
+
+        static string Value(string key, string field, string envSuffix)
+        {
+            var env = Environment.GetEnvironmentVariable("QUOTAPANEL_" + key.ToUpperInvariant() + envSuffix);
             if (!string.IsNullOrEmpty(env)) return env;
             try
             {
@@ -1139,8 +1149,8 @@ namespace QuotaPanel
                 var ser = new JavaScriptSerializer();
                 var root = J.Dict(ser.DeserializeObject(File.ReadAllText(path)));
                 var entry = J.Dict(J.Get(root, key));
-                var id = J.Str(entry, "clientId", "");
-                return id.StartsWith("PASTE_") ? "" : id;
+                var value = J.Str(entry, field, "");
+                return value.StartsWith("PASTE_") ? "" : value;
             }
             catch (Exception) { return ""; }
         }
@@ -1174,10 +1184,11 @@ namespace QuotaPanel
     }
 
     /// Ports of the macOS app's sign-in flows (Services/OAuth.swift): Claude =
-    /// paste-a-code PKCE, Codex = localhost:1455 loopback callback. Tokens are
-    /// written to ~/.quotapanel/credentials.json; the daemon prefers them and
-    /// keeps them refreshed. Returns null on success, "" on user cancel, or an
-    /// error message.
+    /// paste-a-code PKCE, Codex = localhost:1455 loopback callback, Gemini and
+    /// Antigravity = Google loopback callback on localhost:8976, Copilot =
+    /// GitHub device flow. Tokens are written to ~/.quotapanel/credentials.json;
+    /// the daemon prefers them and keeps them refreshed. Each flow returns null
+    /// on success, "" on user cancel, or an error message.
     static class OAuthFlows
     {
         public static string SignInClaude(IWin32Window owner)
@@ -1349,6 +1360,308 @@ namespace QuotaPanel
             AddExpiry(entry, json);
             CredStore.Save("codex", entry);
             return null;
+        }
+
+        // --- Google (Gemini & Antigravity) --------------------------------
+        // Shared Google "installed app" flow, mirroring the macOS GoogleAuth:
+        // PKCE + loopback callback on localhost:8976/oauth2callback. The two
+        // providers differ only in which OAuth client signs the request.
+
+        const int GooglePort = 8976;
+        const string GooglePath = "/oauth2callback";
+        const string GoogleScopes =
+            "https://www.googleapis.com/auth/cloud-platform " +
+            "https://www.googleapis.com/auth/userinfo.email " +
+            "https://www.googleapis.com/auth/userinfo.profile";
+
+        public static string SignInGemini(IWin32Window owner)
+        {
+            return SignInGoogle(owner, "gemini", "Gemini");
+        }
+
+        public static string SignInAntigravity(IWin32Window owner)
+        {
+            return SignInGoogle(owner, "antigravity", "Antigravity");
+        }
+
+        static string SignInGoogle(IWin32Window owner, string key, string display)
+        {
+            var clientId = OAuthCfg.ClientId(key);
+            var clientSecret = OAuthCfg.ClientSecret(key);
+            if (clientId.Length == 0 || clientSecret.Length == 0) return OAuthCfg.MissingHint(display);
+
+            var verifier = Pkce.Random(64);
+            var state = Pkce.Random(32);
+            var redirect = "http://localhost:" + GooglePort + GooglePath;
+            var url = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code" +
+                "&client_id=" + Uri.EscapeDataString(clientId) +
+                "&redirect_uri=" + Uri.EscapeDataString(redirect) +
+                "&scope=" + Uri.EscapeDataString(GoogleScopes) +
+                "&code_challenge=" + Pkce.Challenge(verifier) +
+                "&code_challenge_method=S256" +
+                "&state=" + Uri.EscapeDataString(state) +
+                // offline + consent guarantee a refresh_token on every sign-in
+                "&access_type=offline&prompt=consent";
+
+            string code;
+            var err = AwaitLoopbackCode(owner, "Sign in to " + display, GooglePort, GooglePath, state, url, out code);
+            if (err != null) return err;
+
+            string error;
+            var form = new Dictionary<string, string>();
+            form["grant_type"] = "authorization_code";
+            form["code"] = code;
+            form["client_id"] = clientId;
+            form["client_secret"] = clientSecret;
+            form["redirect_uri"] = redirect;
+            form["code_verifier"] = verifier;
+            var json = PostForm("https://oauth2.googleapis.com/token", form, out error);
+            if (json == null) return error != null ? error : "Token exchange failed.";
+            var access = J.Str(json, "access_token", "");
+            if (access.Length == 0) return "Token exchange failed (no access token).";
+
+            var entry = new Dictionary<string, object>();
+            entry["accessToken"] = access;
+            var refresh = J.Str(json, "refresh_token", null);
+            if (refresh != null) entry["refreshToken"] = refresh;
+            var idToken = J.Str(json, "id_token", null);
+            if (idToken != null) entry["idToken"] = idToken;
+            AddExpiry(entry, json);
+            CredStore.Save(key, entry);
+            return null;
+        }
+
+        // --- Copilot (GitHub device-code flow) ----------------------------
+        // The flow copilot.vim and the other editor plugins use: show a short
+        // code, open github.com/login/device, poll until the user approves.
+
+        public static string SignInCopilot(IWin32Window owner)
+        {
+            var clientId = OAuthCfg.ClientId("copilot");
+            if (clientId.Length == 0) return OAuthCfg.MissingHint("Copilot");
+
+            string error;
+            var start = new Dictionary<string, string>();
+            start["client_id"] = clientId;
+            start["scope"] = "read:user";
+            var device = PostForm("https://github.com/login/device/code", start, out error);
+            if (device == null) return error != null ? error : "Could not start the GitHub sign-in.";
+            var userCode = J.Str(device, "user_code", "");
+            var deviceCode = J.Str(device, "device_code", "");
+            var verifyUri = J.Str(device, "verification_uri", "https://github.com/login/device");
+            var interval = (int)J.Num(device, "interval", 5);
+            var expiresIn = (int)J.Num(device, "expires_in", 900);
+            if (userCode.Length == 0 || deviceCode.Length == 0)
+                return "GitHub device sign-in failed to start: " +
+                    J.Str(device, "error_description", J.Str(device, "error", "unexpected response"));
+
+            try { Clipboard.SetText(userCode); } catch (Exception) { }
+            try { Process.Start(verifyUri); }
+            catch (Exception) { return "Could not open the browser."; }
+
+            Dictionary<string, object> token = null;
+            string pollError = null;
+            bool done = false, cancelled = false;
+            var worker = new Thread(delegate()
+            {
+                try
+                {
+                    var wait = Math.Max(interval, 5);
+                    var deadline = DateTime.UtcNow.AddSeconds(expiresIn);
+                    while (!cancelled && DateTime.UtcNow < deadline)
+                    {
+                        Thread.Sleep(wait * 1000);
+                        if (cancelled) break;
+                        string pollErr;
+                        var body = new Dictionary<string, string>();
+                        body["client_id"] = clientId;
+                        body["device_code"] = deviceCode;
+                        body["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code";
+                        var json = PostForm("https://github.com/login/oauth/access_token", body, out pollErr);
+                        if (json == null)
+                        {
+                            pollError = pollErr != null ? pollErr : "GitHub polling failed.";
+                            break;
+                        }
+                        if (J.Str(json, "access_token", "").Length > 0) { token = json; break; }
+                        var ghError = J.Str(json, "error", "");
+                        if (ghError == "authorization_pending") continue;
+                        if (ghError == "slow_down") { wait += 5; continue; }
+                        if (ghError == "expired_token") { pollError = "The code expired — try again."; break; }
+                        if (ghError == "access_denied") { pollError = "Sign-in was denied."; break; }
+                        pollError = J.Str(json, "error_description",
+                            ghError.Length > 0 ? ghError : "unexpected GitHub response");
+                        break;
+                    }
+                }
+                catch (Exception ex) { pollError = ex.Message; }
+                finally { done = true; }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+
+            var finished = WaitDialog.Show(owner, "Sign in to Copilot",
+                "Enter code " + userCode + " on github.com — it's on your clipboard.",
+                delegate { return done; }, expiresIn);
+            cancelled = true;   // stops the poll loop on cancel/timeout
+            if (!finished) return "";
+            if (pollError != null) return pollError;
+            if (token == null) return "Sign-in timed out — try again.";
+
+            var entry = new Dictionary<string, object>();
+            entry["accessToken"] = J.Str(token, "access_token", "");
+            var ghRefresh = J.Str(token, "refresh_token", null);
+            if (ghRefresh != null) entry["refreshToken"] = ghRefresh;
+            AddExpiry(entry, token);
+            CredStore.Save("copilot", entry);
+            return null;
+        }
+
+        // --- loopback helper ----------------------------------------------
+
+        /// Starts a loopback listener on `port`, opens `url` in the browser,
+        /// and waits (behind a modal WaitDialog) for a request to `pathPrefix`
+        /// carrying the OAuth code. Non-matching requests (favicon etc.) get a
+        /// 404 and the wait continues. Returns null with `code` set on
+        /// success, "" on user cancel, or an error message.
+        static string AwaitLoopbackCode(IWin32Window owner, string title, int port,
+                                        string pathPrefix, string state, string url, out string code)
+        {
+            code = null;
+            System.Net.Sockets.TcpListener listener;
+            try
+            {
+                listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+                listener.Start();
+            }
+            catch (Exception)
+            {
+                return "Port " + port + " is in use (another sign-in may be running) — close it and retry.";
+            }
+
+            try { Process.Start(url); }
+            catch (Exception)
+            {
+                try { listener.Stop(); } catch (Exception) { }
+                return "Could not open the browser.";
+            }
+
+            string gotCode = null, cbError = null;
+            bool done = false;
+            var worker = new Thread(delegate()
+            {
+                try
+                {
+                    while (true)
+                    {
+                        using (var client = listener.AcceptTcpClient())
+                        using (var stream = client.GetStream())
+                        {
+                            var buf = new byte[16384];
+                            int n = stream.Read(buf, 0, buf.Length);
+                            var request = Encoding.UTF8.GetString(buf, 0, Math.Max(0, n));
+                            var line = request.Split('\n')[0];
+                            var parts = line.Split(' ');
+                            var path = parts.Length > 1 ? parts[1] : "";
+                            if (!path.StartsWith(pathPrefix))
+                            {
+                                WriteHttp(stream, "404 Not Found", "");
+                                continue;
+                            }
+                            var q = ParseQuery(line);
+                            string gotState, got;
+                            q.TryGetValue("state", out gotState);
+                            q.TryGetValue("code", out got);
+                            if (q.ContainsKey("error")) cbError = "Sign-in was denied.";
+                            else if (gotState != state) cbError = "Security check (state) mismatch — restart the sign-in.";
+                            else if (string.IsNullOrEmpty(got)) cbError = "No code in the callback.";
+                            else gotCode = got;
+
+                            var html = cbError == null
+                                ? "<html><body style='font-family:sans-serif'><h3>Sign-in complete ✓</h3><p>You can close this window and return to QuotaPanel.</p></body></html>"
+                                : "<html><body style='font-family:sans-serif'><h3>Sign-in failed</h3><p>Return to QuotaPanel and try again.</p></body></html>";
+                            WriteHttp(stream, "200 OK", html);
+                            break;
+                        }
+                    }
+                }
+                catch (Exception) { /* listener stopped = cancelled */ }
+                finally
+                {
+                    try { listener.Stop(); } catch (Exception) { }
+                    done = true;
+                }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+
+            var finished = WaitDialog.Show(owner, title,
+                "Waiting for the browser sign-in…", delegate { return done; }, 300);
+            try { listener.Stop(); } catch (Exception) { }
+            if (!finished) return "";
+            if (cbError != null) return cbError;
+            if (gotCode == null) return "Sign-in timed out — try again.";
+            code = gotCode;
+            return null;
+        }
+
+        static void WriteHttp(System.Net.Sockets.NetworkStream stream, string status, string html)
+        {
+            var payload = Encoding.UTF8.GetBytes(html);
+            var header = Encoding.ASCII.GetBytes(
+                "HTTP/1.1 " + status + "\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " +
+                payload.Length + "\r\n\r\n");
+            stream.Write(header, 0, header.Length);
+            if (payload.Length > 0) stream.Write(payload, 0, payload.Length);
+            stream.Flush();
+        }
+
+        /// POST a form-encoded body and parse the JSON response (Accept:
+        /// application/json — GitHub needs the header, Google ignores it).
+        static Dictionary<string, object> PostForm(string url, Dictionary<string, string> form, out string error)
+        {
+            error = null;
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+                var sb = new StringBuilder();
+                foreach (var pair in form)
+                {
+                    if (sb.Length > 0) sb.Append('&');
+                    sb.Append(Uri.EscapeDataString(pair.Key)).Append('=').Append(Uri.EscapeDataString(pair.Value));
+                }
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                req.Method = "POST";
+                req.ContentType = "application/x-www-form-urlencoded";
+                req.Accept = "application/json";
+                req.Timeout = 30000;
+                var payload = Encoding.UTF8.GetBytes(sb.ToString());
+                using (var s = req.GetRequestStream()) s.Write(payload, 0, payload.Length);
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                using (var reader = new StreamReader(resp.GetResponseStream()))
+                    return J.Dict(new JavaScriptSerializer().DeserializeObject(reader.ReadToEnd()));
+            }
+            catch (System.Net.WebException ex)
+            {
+                error = "Request failed";
+                try
+                {
+                    if (ex.Response != null)
+                        using (var reader = new StreamReader(ex.Response.GetResponseStream()))
+                        {
+                            var text = reader.ReadToEnd();
+                            error += ": " + (text.Length > 200 ? text.Substring(0, 200) : text);
+                        }
+                    else error += ": " + ex.Message;
+                }
+                catch (Exception) { error += ": " + ex.Message; }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return null;
+            }
         }
 
         static void AddExpiry(Dictionary<string, object> entry, Dictionary<string, object> json)
@@ -3311,6 +3624,9 @@ namespace QuotaPanel
             y += form.S(24);
             y = AddAccountRow(body, "claude", "Claude Code", margin, innerW, y);
             y = AddAccountRow(body, "codex", "Codex", margin, innerW, y);
+            y = AddAccountRow(body, "gemini", "Gemini", margin, innerW, y);
+            y = AddAccountRow(body, "copilot", "Copilot", margin, innerW, y);
+            y = AddAccountRow(body, "antigravity", "Antigravity", margin, innerW, y);
             y += form.S(10);
 
             // --- refresh interval slider -------------------------------------
@@ -3409,9 +3725,12 @@ namespace QuotaPanel
                     form.RequestRefresh();
                     return;
                 }
-                var err = id == "claude"
-                    ? OAuthFlows.SignInClaude(form)
-                    : OAuthFlows.SignInCodex(form);
+                string err;
+                if (id == "claude") err = OAuthFlows.SignInClaude(form);
+                else if (id == "codex") err = OAuthFlows.SignInCodex(form);
+                else if (id == "gemini") err = OAuthFlows.SignInGemini(form);
+                else if (id == "copilot") err = OAuthFlows.SignInCopilot(form);
+                else err = OAuthFlows.SignInAntigravity(form);
                 if (err == null)
                 {
                     LoadFrom(current);
@@ -3434,10 +3753,38 @@ namespace QuotaPanel
             inApp = CredStore.Has(id);
             if (inApp) return "Signed in via QuotaPanel";
             var home = CredStore.Home;
-            var cliFile = id == "claude"
-                ? Path.Combine(home, ".claude", ".credentials.json")
-                : Path.Combine(home, ".codex", "auth.json");
-            try { if (File.Exists(cliFile)) return "Using the " + id + " CLI's sign-in"; }
+            var via = "Using the " + id + " CLI's sign-in";
+            var candidates = new List<string>();
+            if (id == "claude") candidates.Add(Path.Combine(home, ".claude", ".credentials.json"));
+            else if (id == "codex") candidates.Add(Path.Combine(home, ".codex", "auth.json"));
+            else if (id == "gemini") candidates.Add(Path.Combine(home, ".gemini", "oauth_creds.json"));
+            else if (id == "copilot")
+            {
+                // Same locations the daemon's CopilotProvider probes
+                via = "Using the editor's GitHub sign-in";
+                var dirs = new string[]
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    Path.Combine(home, ".config"),
+                };
+                foreach (var dir in dirs)
+                {
+                    if (string.IsNullOrEmpty(dir)) continue;
+                    candidates.Add(Path.Combine(dir, "github-copilot", "apps.json"));
+                    candidates.Add(Path.Combine(dir, "github-copilot", "hosts.json"));
+                }
+            }
+            else if (id == "antigravity")
+            {
+                via = "Using local Google credentials";
+                candidates.Add(Path.Combine(home, ".quotapanel", "antigravity", "oauth_creds.json"));
+            }
+            try
+            {
+                foreach (var file in candidates)
+                    if (File.Exists(file)) return via;
+            }
             catch (Exception) { }
             return "Signed out";
         }

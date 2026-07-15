@@ -10,8 +10,10 @@ final class AuthManager {
     /// Active session while the Claude sign-in is waiting for a code
     var claudeSession: ClaudeAuth.Session?
     var claudeCodeInput = ""
-    /// Whether the Codex sign-in is waiting for the browser callback
-    var codexWaiting = false
+    /// Providers whose sign-in is waiting on the browser (callback or device approval)
+    var waiting: Set<Provider> = []
+    /// The device code shown while the Copilot sign-in waits for approval
+    var copilotUserCode: String?
     var busy: Provider?
     var errorMessage: [Provider: String] = [:]
 
@@ -53,24 +55,51 @@ final class AuthManager {
         errorMessage[.claude] = nil
     }
 
-    // MARK: - Codex
+    // MARK: - Browser flows (Codex, Gemini, Antigravity, Copilot)
 
-    func beginCodexLogin() async {
-        errorMessage[.codex] = nil
-        let session = CodexAuth.beginLogin()
-        codexWaiting = true
-        busy = .codex
+    /// Runs the browser-based sign-in for `provider`: Codex via its localhost
+    /// callback, Gemini/Antigravity via the Google loopback flow, Copilot via
+    /// the GitHub device flow.
+    func beginBrowserLogin(_ provider: Provider) async {
+        errorMessage[provider] = nil
+        waiting.insert(provider)
+        busy = provider
         defer {
-            codexWaiting = false
+            waiting.remove(provider)
             busy = nil
         }
-        NSWorkspace.shared.open(session.url)
         do {
-            let credentials = try await CodexAuth.completeLogin(session: session)
-            CredentialStore.save(credentials, for: .codex)
+            let credentials: StoredCredentials
+            switch provider {
+            case .codex:
+                let session = CodexAuth.beginLogin()
+                NSWorkspace.shared.open(session.url)
+                credentials = try await CodexAuth.completeLogin(session: session)
+            case .gemini, .antigravity:
+                let client = provider == .gemini ? OAuthClients.gemini : OAuthClients.antigravity
+                guard !client.id.isEmpty, !client.secret.isEmpty else {
+                    throw OAuthError.missingClient(provider.displayName)
+                }
+                let session = GoogleAuth.beginLogin(client: client)
+                NSWorkspace.shared.open(session.url)
+                credentials = try await GoogleAuth.completeLogin(session: session)
+            case .copilot:
+                let clientID = OAuthClients.copilot.id
+                guard !clientID.isEmpty else {
+                    throw OAuthError.missingClient(provider.displayName)
+                }
+                let session = try await GitHubDeviceAuth.beginLogin(clientID: clientID)
+                copilotUserCode = session.userCode
+                defer { copilotUserCode = nil }
+                NSWorkspace.shared.open(session.verificationURL)
+                credentials = try await GitHubDeviceAuth.completeLogin(session: session, clientID: clientID)
+            default:
+                return
+            }
+            CredentialStore.save(credentials, for: provider)
             await onCredentialsChanged?()
         } catch {
-            errorMessage[.codex] = error.localizedDescription
+            errorMessage[provider] = error.localizedDescription
         }
     }
 

@@ -91,9 +91,15 @@ enum Provider: String, CaseIterable, Identifiable, Codable {
         self == .claude || self == .codex
     }
 
-    /// Providers with an in-app OAuth sign-in flow (Settings → Accounts)
+    /// Providers with an in-app OAuth sign-in flow (Settings → Accounts):
+    /// Claude/Codex/Gemini/Antigravity via OAuth callbacks, Copilot via the
+    /// GitHub device flow. The remaining providers have no public OAuth
+    /// client, so their credentials can only be detected from the CLI/editor.
     var supportsInAppSignIn: Bool {
-        self == .claude || self == .codex
+        switch self {
+        case .claude, .codex, .gemini, .copilot, .antigravity: true
+        default: false
+        }
     }
 
     /// Whether the provider's tool has left credentials on this machine —

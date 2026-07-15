@@ -31,11 +31,11 @@ struct SettingsView: View {
                             .buttonStyle(.borderless)
                             .font(.caption)
                     }
-                } else if auth.codexWaiting {
+                } else if auth.waiting.contains(provider) {
                     ProgressView().controlSize(.small)
                 } else {
                     Button("Sign in") {
-                        Task { await auth.beginCodexLogin() }
+                        Task { await auth.beginBrowserLogin(provider) }
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
@@ -65,10 +65,30 @@ struct SettingsView: View {
                 }
             }
 
-            if provider == .codex, auth.codexWaiting {
-                Text("Complete the sign-in in your browser — waiting…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            if provider != .claude, auth.waiting.contains(provider) {
+                if provider == .copilot, let code = auth.copilotUserCode {
+                    HStack(spacing: 6) {
+                        Text("Enter this code on github.com:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(code)
+                            .font(.caption.monospaced().weight(.semibold))
+                            .textSelection(.enabled)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(code, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .help("Copy code")
+                    }
+                } else {
+                    Text("Complete the sign-in in your browser — waiting…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if let error = auth.errorMessage[provider] {

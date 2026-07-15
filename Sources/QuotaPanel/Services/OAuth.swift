@@ -36,6 +36,7 @@ enum OAuthError: LocalizedError {
     case timeout
     case portBusy
     case accessDenied
+    case missingClient(String)
 
     var errorDescription: String? {
         switch self {
@@ -43,8 +44,10 @@ enum OAuthError: LocalizedError {
         case .stateMismatch: "Security check (state) mismatch — restart the sign-in"
         case .exchangeFailed(let detail): "Token exchange failed: \(detail)"
         case .timeout: "Sign-in timed out — try again"
-        case .portBusy: "Port 1455 is in use (another codex sign-in may be running) — close it and retry"
+        case .portBusy: "The callback port is in use (another sign-in may be running) — close it and retry"
         case .accessDenied: "Sign-in was denied"
+        case .missingClient(let provider):
+            "\(provider) client id missing — copy oauth-clients.sample.json to ~/.quotapanel/oauth-clients.json and fill it in"
         }
     }
 }
@@ -258,12 +261,236 @@ enum CodexAuth {
     }
 }
 
+// MARK: - Google (Gemini & Antigravity, localhost-callback PKCE flow)
+
+/// Sign-in with a Google account via a Google "installed app" OAuth client
+/// (gemini-cli's for Gemini, Antigravity's for Antigravity). Google allows any
+/// loopback port for installed-app clients; after approval the browser is
+/// redirected to `localhost:8976/oauth2callback` where the in-app mini server
+/// catches the code.
+enum GoogleAuth {
+    private static let authorizeURL = "https://accounts.google.com/o/oauth2/v2/auth"
+    private static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+    static let callbackPort: UInt16 = 8976
+    static let callbackPath = "/oauth2callback"
+    private static let redirectURI = "http://localhost:8976/oauth2callback"
+    /// Same scopes gemini-cli requests — Cloud Code quota needs cloud-platform.
+    private static let scopes = [
+        "https://www.googleapis.com/auth/cloud-platform",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+    ].joined(separator: " ")
+
+    struct Session: Sendable {
+        let url: URL
+        let verifier: String
+        let state: String
+        let client: OAuthClients.Client
+    }
+
+    static func beginLogin(client: OAuthClients.Client) -> Session {
+        let verifier = PKCE.generateVerifier()
+        let state = PKCE.randomState()
+        var components = URLComponents(string: authorizeURL)!
+        components.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: client.id),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "scope", value: scopes),
+            URLQueryItem(name: "code_challenge", value: PKCE.challenge(for: verifier)),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "state", value: state),
+            // offline + consent guarantee a refresh_token on every sign-in
+            URLQueryItem(name: "access_type", value: "offline"),
+            URLQueryItem(name: "prompt", value: "consent"),
+        ]
+        return Session(url: components.url!, verifier: verifier, state: state, client: client)
+    }
+
+    /// Waits for the callback and exchanges the code (the browser must already
+    /// be opened at `beginLogin().url`)
+    static func completeLogin(session: Session, timeoutSeconds: Double = 300) async throws -> StoredCredentials {
+        let code = try await CallbackServer.waitForCode(
+            expectedState: session.state,
+            port: callbackPort,
+            timeoutSeconds: timeoutSeconds,
+            path: callbackPath
+        )
+        return try await requestToken(form: [
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": session.client.id,
+            "client_secret": session.client.secret,
+            "redirect_uri": redirectURI,
+            "code_verifier": session.verifier,
+        ])
+    }
+
+    /// refresh_token flow for stored Google credentials; keeps the old refresh
+    /// token and id_token when Google omits them from the response.
+    static func refresh(_ credentials: StoredCredentials, client: OAuthClients.Client) async -> StoredCredentials? {
+        guard let refreshToken = credentials.refreshToken, !refreshToken.isEmpty,
+              !client.id.isEmpty, !client.secret.isEmpty
+        else { return nil }
+        guard var renewed = try? await requestToken(form: [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": client.id,
+            "client_secret": client.secret,
+        ]) else { return nil }
+        if renewed.refreshToken == nil { renewed.refreshToken = refreshToken }
+        renewed.idToken = renewed.idToken ?? credentials.idToken
+        renewed.plan = credentials.plan
+        renewed.accountId = renewed.accountId ?? credentials.accountId
+        return renewed
+    }
+
+    /// Google's token endpoint takes form-encoded bodies (unlike Anthropic/OpenAI)
+    private static func requestToken(form: [String: String]) async throws -> StoredCredentials {
+        var request = URLRequest(url: tokenURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formEncode(form).data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let accessToken = json["access_token"] as? String, !accessToken.isEmpty
+        else {
+            let detail = String(data: data.prefix(200), encoding: .utf8) ?? "HTTP \(status)"
+            throw OAuthError.exchangeFailed(detail)
+        }
+
+        var expires: Date?
+        if let seconds = json["expires_in"] as? Double {
+            expires = Date(timeIntervalSinceNow: seconds)
+        }
+        return StoredCredentials(
+            accessToken: accessToken,
+            refreshToken: json["refresh_token"] as? String,
+            idToken: json["id_token"] as? String,
+            accountId: nil,
+            expiresAt: expires,
+            plan: nil
+        )
+    }
+
+    static func formEncode(_ form: [String: String]) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return form.map { key, value in
+            let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+            return "\(key)=\(encoded)"
+        }.joined(separator: "&")
+    }
+}
+
+// MARK: - GitHub (Copilot, device-code flow)
+
+/// Sign-in via GitHub's device flow (the same one copilot.vim and the other
+/// editor plugins use): show a short code, open github.com/login/device, and
+/// poll the token endpoint until the user approves.
+enum GitHubDeviceAuth {
+    private static let deviceCodeURL = URL(string: "https://github.com/login/device/code")!
+    private static let tokenURL = URL(string: "https://github.com/login/oauth/access_token")!
+
+    struct Session: Sendable {
+        let deviceCode: String
+        let userCode: String
+        let verificationURL: URL
+        let interval: Double
+        let expiresAt: Date
+    }
+
+    static func beginLogin(clientID: String) async throws -> Session {
+        let json = try await postForm(deviceCodeURL, form: ["client_id": clientID, "scope": "read:user"])
+        guard let deviceCode = json["device_code"] as? String, !deviceCode.isEmpty,
+              let userCode = json["user_code"] as? String, !userCode.isEmpty
+        else {
+            let detail = (json["error_description"] as? String) ?? (json["error"] as? String) ?? "no device code"
+            throw OAuthError.exchangeFailed(detail)
+        }
+        let verification = (json["verification_uri"] as? String).flatMap(URL.init)
+            ?? URL(string: "https://github.com/login/device")!
+        return Session(
+            deviceCode: deviceCode,
+            userCode: userCode,
+            verificationURL: verification,
+            interval: (json["interval"] as? Double) ?? 5,
+            expiresAt: Date(timeIntervalSinceNow: (json["expires_in"] as? Double) ?? 900)
+        )
+    }
+
+    /// Polls until the user approves in the browser, the code expires, or
+    /// GitHub reports a hard error.
+    static func completeLogin(session: Session, clientID: String) async throws -> StoredCredentials {
+        var interval = max(session.interval, 5)
+        while Date() < session.expiresAt {
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            let json = try await postForm(tokenURL, form: [
+                "client_id": clientID,
+                "device_code": session.deviceCode,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            ])
+            if let token = json["access_token"] as? String, !token.isEmpty {
+                var expires: Date?
+                if let seconds = json["expires_in"] as? Double { expires = Date(timeIntervalSinceNow: seconds) }
+                return StoredCredentials(
+                    accessToken: token,
+                    refreshToken: json["refresh_token"] as? String,
+                    idToken: nil,
+                    accountId: nil,
+                    expiresAt: expires,
+                    plan: nil
+                )
+            }
+            switch json["error"] as? String {
+            case "authorization_pending":
+                continue
+            case "slow_down":
+                interval += (json["interval"] as? Double).map { max($0 - interval, 5) } ?? 5
+            case "access_denied":
+                throw OAuthError.accessDenied
+            case "expired_token":
+                throw OAuthError.timeout
+            case let error?:
+                throw OAuthError.exchangeFailed((json["error_description"] as? String) ?? error)
+            case nil:
+                throw OAuthError.exchangeFailed("unexpected GitHub response")
+            }
+        }
+        throw OAuthError.timeout
+    }
+
+    private static func postForm(_ url: URL, form: [String: String]) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = GoogleAuth.formEncode(form).data(using: .utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OAuthError.exchangeFailed("HTTP \(status)")
+        }
+        return json
+    }
+}
+
 // MARK: - Callback server
 
 /// Mini HTTP server that binds to loopback only and waits for a single
 /// OAuth callback. Shuts itself down after responding.
 enum CallbackServer {
-    static func waitForCode(expectedState: String, port: UInt16, timeoutSeconds: Double) async throws -> String {
+    static func waitForCode(
+        expectedState: String,
+        port: UInt16,
+        timeoutSeconds: Double,
+        path: String = "/auth/callback"
+    ) async throws -> String {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: .ipv4(.loopback),
@@ -291,7 +518,7 @@ enum CallbackServer {
                         connection.cancel()
                         return
                     }
-                    let result = Self.parseCallback(request: request, expectedState: expectedState)
+                    let result = Self.parseCallback(request: request, expectedState: expectedState, path: path)
                     let html: String
                     switch result {
                     case .success:
@@ -319,15 +546,15 @@ enum CallbackServer {
     }
 
     /// Extracts the callback result from an HTTP request; nil if not the callback path
-    static func parseCallback(request: String, expectedState: String) -> Result<String, Error>? {
+    static func parseCallback(request: String, expectedState: String, path: String = "/auth/callback") -> Result<String, Error>? {
         guard let requestLine = request.split(separator: "\r\n").first,
               requestLine.hasPrefix("GET ")
         else { return .failure(OAuthError.badCode) }
         let target = requestLine.split(separator: " ")
         guard target.count >= 2 else { return .failure(OAuthError.badCode) }
-        let path = String(target[1])
-        guard path.hasPrefix("/auth/callback") else { return nil }
-        guard let components = URLComponents(string: path) else { return .failure(OAuthError.badCode) }
+        let requestPath = String(target[1])
+        guard requestPath.hasPrefix(path) else { return nil }
+        guard let components = URLComponents(string: requestPath) else { return .failure(OAuthError.badCode) }
         let query = components.queryItems ?? []
         if query.contains(where: { $0.name == "error" }) {
             return .failure(OAuthError.accessDenied)

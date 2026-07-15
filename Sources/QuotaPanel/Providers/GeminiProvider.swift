@@ -14,8 +14,12 @@ enum GeminiProvider {
     private static var clientSecret: String { OAuthClients.gemini.secret }
 
     static func fetch() async -> ProviderSnapshot {
+        // In-app sign-in (Settings → Accounts) takes priority over the CLI's file
+        if let stored = CredentialStore.load(.gemini) {
+            return await fetchWithStored(stored)
+        }
         guard var creds = loadCreds() else {
-            return snapshot(.authProblem("No Gemini credentials — run `gemini` and sign in once"))
+            return snapshot(.authProblem("No Gemini credentials — sign in from Settings or run `gemini` once"))
         }
         if let type = selectedAuthType(), type == "api-key" || type == "vertex-ai" {
             return snapshot(.error("Gemini \(type) auth isn't supported — sign in with a personal Google account"))
@@ -35,6 +39,28 @@ enum GeminiProvider {
 
         let resolved = await loadCodeAssist(token: token)
         return await fetchQuota(token: token, project: resolved.project, plan: planName(resolved, idToken: creds.idToken))
+    }
+
+    // MARK: - In-app credentials
+
+    /// QuotaPanel's own sign-in: refresh through the same Google client and
+    /// persist renewed tokens back to the store (unlike the CLI's file, which
+    /// is never written).
+    private static func fetchWithStored(_ credentials: StoredCredentials) async -> ProviderSnapshot {
+        var stored = credentials
+        if stored.isExpired {
+            guard let renewed = await GoogleAuth.refresh(stored, client: OAuthClients.gemini) else {
+                return snapshot(.authProblem("Gemini token refresh failed — sign in again from Settings"))
+            }
+            stored = renewed
+            CredentialStore.save(stored, for: .gemini)
+        }
+        let resolved = await loadCodeAssist(token: stored.accessToken)
+        return await fetchQuota(
+            token: stored.accessToken,
+            project: resolved.project,
+            plan: planName(resolved, idToken: stored.idToken)
+        )
     }
 
     // MARK: - Local credentials

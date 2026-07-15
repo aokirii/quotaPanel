@@ -9,5 +9,12 @@
   },
   "claude": {
     "clientId": "PASTE_CLAUDE_CODE_OAUTH_CLIENT_ID"
+  },
+  "copilot": {
+    "clientId": "PASTE_COPILOT_GITHUB_APP_CLIENT_ID"
+  },
+  "antigravity": {
+    "clientId": "PASTE_ANTIGRAVITY_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "clientSecret": "PASTE_ANTIGRAVITY_OAUTH_CLIENT_SECRET"
   }
 }

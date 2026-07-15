@@ -14,7 +14,7 @@ enum CopilotProvider {
 
     static func fetch() async -> ProviderSnapshot {
         guard let token = loadToken() else {
-            return snapshot(.authProblem("No Copilot credentials — sign in to GitHub Copilot in your editor"))
+            return snapshot(.authProblem("No Copilot credentials — sign in from Settings or in your editor"))
         }
 
         var request = URLRequest(url: usageURL)
@@ -45,10 +45,15 @@ enum CopilotProvider {
         }
     }
 
-    /// The GitHub OAuth token: the first `github.com[:appId]` entry's
-    /// `oauth_token`. apps.json keys look like "github.com:Iv23…"; the older
-    /// hosts.json uses a bare "github.com".
+    /// The GitHub OAuth token. A QuotaPanel front-end's own sign-in (the
+    /// GitHub device flow) takes priority; otherwise the first
+    /// `github.com[:appId]` entry's `oauth_token` from the editor's config.
+    /// apps.json keys look like "github.com:Iv23…"; the older hosts.json uses
+    /// a bare "github.com".
     static func loadToken() -> String? {
+        if let stored = CredentialStore.load("copilot"), !stored.accessToken.isEmpty {
+            return stored.accessToken
+        }
         // configHome covers Linux (~/.config); on Windows Copilot's CLI/editors
         // write under %LOCALAPPDATA% (= dataHome), so probe both.
         var files: [URL] = []

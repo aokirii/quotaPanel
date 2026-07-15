@@ -47,11 +47,26 @@ cd quotaPanel
 powershell -ExecutionPolicy Bypass -File windows\install.ps1
 ```
 
-The script imports the Visual Studio build environment (installing the Windows SDK component first if it's missing), builds the same portable Swift daemon the Linux port uses, compiles the tray app with the in-box C# compiler, installs both (plus the provider icons) under `%LOCALAPPDATA%\QuotaPanel`, and starts it — the QuotaPanel icon appears in the system tray. Right-click it to enable *Start with Windows*. For token refresh and the in-app sign-in (Settings → Accounts, Claude and Codex), copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to `%APPDATA%\quotapanel\oauth-clients.json` and fill it in.
+The script imports the Visual Studio build environment (installing the Windows SDK component first if it's missing), builds the same portable Swift daemon the Linux port uses, compiles the tray app with the in-box C# compiler, installs both (plus the provider icons) under `%LOCALAPPDATA%\QuotaPanel`, and starts it — the QuotaPanel icon appears in the system tray. Right-click it to enable *Start with Windows*. For token refresh and the in-app sign-in (Settings → Accounts — Claude, Codex, Gemini, Copilot, and Antigravity), copy [`oauth-clients.sample.json`](oauth-clients.sample.json) to `%APPDATA%\quotapanel\oauth-clients.json` and fill it in.
 
 > **Status:** builds and runs on Windows 11. The Windows tray is newer than the macOS and Linux front-ends, so if you hit a rough edge please open an issue.
 
 To update on any platform, pull the latest changes and run the same build or install command again.
+
+## Uninstall
+
+Each platform has an uninstall script that removes everything QuotaPanel left behind — the app/daemon/extension, its config and status files, the autostart entry, and the `~/.quotapanel` data directory (in-app sign-in credentials and `oauth-clients.json`). Every script lists what it found and asks once before deleting; pass `-y` (`-Yes` on Windows) to skip the prompt, or `--keep-credentials` (`-KeepCredentials`) to preserve `~/.quotapanel` for a later reinstall.
+
+```sh
+./uninstall.sh          # macOS
+linux/uninstall.sh      # Linux (GNOME)
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1   # Windows
+```
+
+The CLIs' own credentials (`~/.claude`, `~/.codex`, `~/.gemini`, …) are never touched — QuotaPanel only ever read those.
 
 ## Usage
 
